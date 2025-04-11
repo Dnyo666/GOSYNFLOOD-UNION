@@ -1,9 +1,21 @@
 #!/bin/bash
 
 # GOSYNFLOOD-UNION 攻击管理平台一键部署脚本
-# 交互式安装向导
+# 支持交互式安装向导和命令行参数方式安装
 
 set -e
+
+# 默认配置
+INSTALL_DIR="$PWD"
+INSTALL_MODE=""
+ADMIN_TOKEN=""
+MANAGER_URL=""
+AGENT_ID=""
+AGENT_KEY=""
+BUILD_FRONTEND=true
+BUILD_BACKEND=true
+BUILD_CLIENT=true
+INTERACTIVE=true
 
 # 彩色输出函数
 print_green() {
@@ -20,6 +32,93 @@ print_yellow() {
 
 print_red() {
     echo -e "\033[0;31m$1\033[0m"
+}
+
+# 显示帮助信息
+show_help() {
+    echo "GOSYNFLOOD-UNION 攻击管理平台安装脚本"
+    echo ""
+    echo "用法: $0 [选项]"
+    echo ""
+    echo "选项:"
+    echo "  --mode=(manager|agent)   安装模式，管理服务器或攻击代理"
+    echo "  --install-dir=<目录>     指定安装目录"
+    echo "  --admin-token=<令牌>     设置管理员令牌（仅manager模式）"
+    echo "  --manager-url=<URL>      管理服务器URL（仅agent模式）"
+    echo "  --agent-key=<密钥>       攻击代理的API密钥（仅agent模式）"
+    echo "  --agent-id=<ID>          攻击代理的ID（仅agent模式）"
+    echo "  --no-frontend            不构建前端（仅manager模式）"
+    echo "  --no-backend             不构建后端（仅manager模式）"
+    echo "  --no-client              不构建客户端代理"
+    echo "  --help                   显示帮助信息"
+    echo ""
+    echo "示例:"
+    echo "  $0 --mode=manager --admin-token=\"secure-token\""
+    echo "  $0 --mode=agent --manager-url=\"http://192.168.1.100:31457\" --agent-id=1 --agent-key=\"api-key\""
+    echo ""
+}
+
+# 解析命令行参数
+parse_args() {
+    for arg in "$@"; do
+        case $arg in
+            --mode=*)
+                INSTALL_MODE="${arg#*=}"
+                INTERACTIVE=false
+                ;;
+            --install-dir=*)
+                INSTALL_DIR="${arg#*=}"
+                ;;
+            --admin-token=*)
+                ADMIN_TOKEN="${arg#*=}"
+                ;;
+            --manager-url=*)
+                MANAGER_URL="${arg#*=}"
+                ;;
+            --agent-key=*)
+                AGENT_KEY="${arg#*=}"
+                ;;
+            --agent-id=*)
+                AGENT_ID="${arg#*=}"
+                ;;
+            --no-frontend)
+                BUILD_FRONTEND=false
+                ;;
+            --no-backend)
+                BUILD_BACKEND=false
+                ;;
+            --no-client)
+                BUILD_CLIENT=false
+                ;;
+            --help)
+                show_help
+                exit 0
+                ;;
+            *)
+                # 忽略未知参数
+                ;;
+        esac
+    done
+    
+    # 验证参数
+    if [ "$INTERACTIVE" = false ]; then
+        if [ -z "$INSTALL_MODE" ]; then
+            print_red "错误: 必须指定安装模式 (--mode=manager|agent)"
+            exit 1
+        fi
+        
+        if [ "$INSTALL_MODE" != "manager" ] && [ "$INSTALL_MODE" != "agent" ]; then
+            print_red "错误: 安装模式必须是 'manager' 或 'agent'"
+            exit 1
+        fi
+        
+        if [ "$INSTALL_MODE" = "agent" ]; then
+            if [ -z "$MANAGER_URL" ] || [ -z "$AGENT_KEY" ] || [ -z "$AGENT_ID" ]; then
+                print_red "错误: agent模式必须提供 --manager-url, --agent-key 和 --agent-id 参数"
+                exit 1
+            fi
+        fi
+    fi
 }
 
 # 显示欢迎信息
@@ -245,14 +344,32 @@ check_dependencies() {
     
     # 检查 Go
     if ! command -v go &> /dev/null; then
-        print_red "错误: Go 未安装。请安装 Go 1.15 或更高版本。"
-        exit 1
+        print_yellow "未检测到Go，将尝试自动安装Go 1.18..."
+        install_go
+    else
+        # 检查Go版本
+        GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+        GO_MAJOR=$(echo $GO_VERSION | cut -d. -f1)
+        GO_MINOR=$(echo $GO_VERSION | cut -d. -f2)
+        
+        if [ "$GO_MAJOR" -lt 1 ] || ([ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 15 ]); then
+            print_yellow "检测到Go版本为 $GO_VERSION，低于要求的1.15版本。"
+            read -p "是否更新到最新版本？[Y/n]: " update_go
+            if [[ ! "$update_go" =~ ^[Nn]$ ]]; then
+                install_go
+            else
+                print_yellow "继续使用当前Go版本，可能会影响部分功能。"
+            fi
+        else
+            print_green "已安装Go $GO_VERSION，符合要求。"
+        fi
     fi
     
     if [ "$INSTALL_MODE" = "manager" ]; then
         # 仅在管理服务器模式下检查 Node.js 和 npm
         if [ "$BUILD_FRONTEND" = true ] && ! command -v node &> /dev/null; then
             print_red "错误: Node.js 未安装。请安装 Node.js 14 或更高版本。"
+            print_yellow "提示: 可以访问 https://nodejs.org/ 下载安装Node.js"
             exit 1
         fi
         
@@ -263,6 +380,183 @@ check_dependencies() {
     fi
     
     print_green "依赖检查完成。"
+}
+
+# 安装Go
+install_go() {
+    print_blue "开始安装Go..."
+    
+    # 检测操作系统和架构
+    case "$(uname -s)" in
+        Linux*)     OS="linux" ;;
+        Darwin*)    OS="darwin" ;;
+        MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
+        *)          
+            print_red "不支持的操作系统: $(uname -s)"
+            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
+            exit 1 
+            ;;
+    esac
+    
+    ARCH="$(uname -m)"
+    case $ARCH in
+        x86_64)
+            ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            ARCH="arm64"
+            ;;
+        *)
+            print_red "不支持的系统架构: $ARCH"
+            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
+            exit 1
+            ;;
+    esac
+    
+    # 设置Go版本
+    GO_VERSION="1.18.10"
+    
+    # Windows平台特殊处理
+    if [ "$OS" = "windows" ]; then
+        print_yellow "检测到Windows系统，将下载安装程序..."
+        print_yellow "安装完成后请重新运行此脚本。"
+        
+        # Windows使用zip或msi
+        GO_DOWNLOAD_URL="https://golang.org/dl/go${GO_VERSION}.windows-${ARCH}.zip"
+        
+        # 临时目录
+        TMP_DIR="${TEMP:-/tmp}"
+        GO_ZIP="$TMP_DIR/go.zip"
+        
+        echo "下载Go $GO_VERSION (windows-$ARCH)..."
+        if command -v curl &> /dev/null; then
+            curl -L $GO_DOWNLOAD_URL -o $GO_ZIP
+        elif command -v wget &> /dev/null; then
+            wget -O $GO_ZIP $GO_DOWNLOAD_URL
+        else
+            print_red "错误: 需要curl或wget来下载Go"
+            print_yellow "请访问 https://golang.org/dl/ 手动下载安装"
+            exit 1
+        fi
+        
+        if [ ! -f $GO_ZIP ]; then
+            print_red "下载失败，请手动安装Go: https://golang.org/dl/"
+            exit 1
+        fi
+        
+        # 解压目录
+        GO_INSTALL_DIR="${LOCALAPPDATA:-$HOME}/go"
+        
+        # 确保目录存在
+        mkdir -p "$GO_INSTALL_DIR"
+        
+        print_blue "正在解压Go到 $GO_INSTALL_DIR..."
+        if command -v unzip &> /dev/null; then
+            unzip -q -o $GO_ZIP -d "$GO_INSTALL_DIR"
+        else
+            print_red "未找到unzip工具，无法解压Go安装包"
+            print_yellow "请手动解压 $GO_ZIP 到 $GO_INSTALL_DIR"
+            exit 1
+        fi
+        
+        # 添加到PATH（Windows特有）
+        print_yellow "请确保将以下路径添加到系统环境变量PATH中:"
+        print_yellow "$GO_INSTALL_DIR\\go\\bin"
+        
+        # 设置临时环境变量
+        export PATH="$GO_INSTALL_DIR/go/bin:$PATH"
+        
+        # 验证安装
+        if command -v go &> /dev/null; then
+            GO_VERSION=$(go version)
+            print_green "Go安装成功: $GO_VERSION"
+        else
+            print_red "Go安装后无法在PATH中找到"
+            print_yellow "请确保添加 $GO_INSTALL_DIR\\go\\bin 到PATH环境变量并重启终端"
+            exit 1
+        fi
+    else
+        # Linux/macOS安装流程
+        GO_DOWNLOAD_URL="https://golang.org/dl/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
+        
+        # 临时目录
+        TMP_DIR=$(mktemp -d)
+        GO_TAR="$TMP_DIR/go.tar.gz"
+        
+        echo "下载Go $GO_VERSION ($OS-$ARCH)..."
+        if command -v curl &> /dev/null; then
+            curl -L $GO_DOWNLOAD_URL -o $GO_TAR
+        elif command -v wget &> /dev/null; then
+            wget -O $GO_TAR $GO_DOWNLOAD_URL
+        else
+            print_red "错误: 需要curl或wget来下载Go"
+            exit 1
+        fi
+        
+        if [ ! -f $GO_TAR ]; then
+            print_red "下载失败，请手动安装Go: https://golang.org/dl/"
+            exit 1
+        fi
+        
+        # 默认安装目录
+        GO_INSTALL_DIR="/usr/local"
+        
+        # 检查是否有权限写入安装目录
+        if [ ! -w "$GO_INSTALL_DIR" ]; then
+            print_yellow "需要管理员权限安装Go到 $GO_INSTALL_DIR"
+            if [ "$OS" = "linux" ] || [ "$OS" = "darwin" ]; then
+                print_blue "使用sudo安装Go..."
+                sudo tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+            else
+                print_red "请使用管理员权限运行安装程序，或手动安装Go"
+                exit 1
+            fi
+        else
+            tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+        fi
+        
+        # 清理临时文件
+        rm -rf $TMP_DIR
+        
+        # 设置PATH
+        if ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.bashrc 2>/dev/null && \
+           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.zshrc 2>/dev/null && \
+           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.profile 2>/dev/null; then
+            
+            print_yellow "将Go添加到环境变量PATH中..."
+            
+            if [ -f ~/.profile ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
+                print_green "已添加到 ~/.profile"
+            fi
+            
+            if [ -f ~/.bashrc ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+                print_green "已添加到 ~/.bashrc"
+            fi
+            
+            if [ -f ~/.zshrc ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.zshrc
+                print_green "已添加到 ~/.zshrc"
+            fi
+            
+            print_yellow "请运行以下命令使PATH变量立即生效，或重启终端:"
+            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
+        fi
+        
+        # 临时添加到当前会话的PATH
+        export PATH=$PATH:/usr/local/go/bin
+        
+        # 验证安装
+        if command -v go &> /dev/null; then
+            GO_VERSION=$(go version)
+            print_green "Go安装成功: $GO_VERSION"
+        else
+            print_red "Go安装后无法在PATH中找到，请手动添加 /usr/local/go/bin 到PATH环境变量"
+            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
+            exit 1
+        fi
+    fi
 }
 
 # 获取项目代码
@@ -424,26 +718,68 @@ show_usage() {
 }
 
 # 主流程
-show_welcome
-get_install_dir
-select_install_mode
+# 解析命令行参数
+parse_args "$@"
 
-if [ "$INSTALL_MODE" = "manager" ]; then
-    configure_manager
+# 创建并切换到安装目录
+if [ ! -d "$INSTALL_DIR" ]; then
+    mkdir -p "$INSTALL_DIR"
+fi
+cd "$INSTALL_DIR"
+
+if [ "$INTERACTIVE" = true ]; then
+    # 交互式模式
+    show_welcome
+    get_install_dir
+    select_install_mode
+    
+    if [ "$INSTALL_MODE" = "manager" ]; then
+        configure_manager
+    else
+        configure_agent
+    fi
+    
+    confirm_installation
 else
-    configure_agent
+    # 非交互式模式
+    print_blue "GOSYNFLOOD-UNION 攻击管理平台安装程序"
+    print_blue "使用非交互式模式安装"
+    echo ""
+    echo "安装配置:"
+    echo "安装目录: $INSTALL_DIR"
+    echo "安装模式: $INSTALL_MODE"
+    
+    if [ "$INSTALL_MODE" = "manager" ]; then
+        if [ -z "$ADMIN_TOKEN" ]; then
+            ADMIN_TOKEN=$(openssl rand -hex 16)
+            print_yellow "自动生成管理员令牌: $ADMIN_TOKEN"
+        else
+            echo "管理员令牌: $ADMIN_TOKEN"
+        fi
+        echo "构建前端: $([ "$BUILD_FRONTEND" = true ] && echo "是" || echo "否")"
+        echo "构建后端: $([ "$BUILD_BACKEND" = true ] && echo "是" || echo "否")"
+        echo "构建客户端: $([ "$BUILD_CLIENT" = true ] && echo "是" || echo "否")"
+    else
+        echo "管理服务器URL: $MANAGER_URL"
+        echo "代理ID: $AGENT_ID"
+        echo "API密钥: $AGENT_KEY"
+        # 攻击代理模式下默认只构建客户端
+        BUILD_FRONTEND=false
+        BUILD_BACKEND=false
+    fi
+    
+    echo ""
 fi
 
-confirm_installation
 check_dependencies
 get_source_code
 
 if [ "$INSTALL_MODE" = "manager" ]; then
-    build_frontend
-    build_backend
+    [ "$BUILD_FRONTEND" = true ] && build_frontend
+    [ "$BUILD_BACKEND" = true ] && build_backend
     [ "$BUILD_CLIENT" = true ] && build_client
 else
-    build_client
+    [ "$BUILD_CLIENT" = true ] && build_client
 fi
 
 create_config
