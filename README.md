@@ -2,6 +2,8 @@
 
 这是一个基于gosynflood工具的分布式SYN洪水攻击管理平台，允许从一个中央控制台管理多个攻击服务器，并协调它们进行分布式攻击。
 
+> **更新说明**: 启动脚本现已移至`deploy`目录，可通过`deploy/server-launcher.sh`（Linux/macOS）或`deploy\server-launcher.bat`（Windows）运行。bin目录在.gitignore中，因此启动脚本不会在该目录中被版本控制。
+
 ## 警告
 
 **本工具仅供授权的网络安全测试、教育和研究目的使用。**
@@ -157,6 +159,7 @@ go build -o ../bin/attack-agent agent.go
 
 ```json
 {
+  "host": "0.0.0.0",
   "port": 31457,
   "staticDir": "./static",
   "logLevel": "info",
@@ -164,6 +167,13 @@ go build -o ../bin/attack-agent agent.go
   "dataDir": "../data"
 }
 ```
+
+配置字段说明：
+- `host`: 监听的网络接口，设置为"0.0.0.0"允许从任何IP地址访问服务器
+- `port`: 服务器监听端口
+- `staticDir`: 静态文件目录
+- `allowedOrigins`: 允许的CORS跨域来源
+- `dataDir`: 数据存储目录
 
 #### 3.2 安全配置
 
@@ -179,14 +189,94 @@ var (
 
 ### 1. 管理服务器启动
 
-如果使用自动安装脚本，可以直接运行：
+安装脚本提供了启动脚本，可以方便地在后台运行服务器。**注意：启动脚本位于deploy目录而不是bin目录中**。
+
+#### Linux/macOS环境：
 
 ```bash
-cd bin
-./attack-server -config ../backend/config.json
+# 赋予启动脚本执行权限
+chmod +x deploy/server-launcher.sh
+
+# 在后台运行服务器
+deploy/server-launcher.sh
+
+# 查看所有可用选项
+deploy/server-launcher.sh --help
+
+# 检查服务器状态
+deploy/server-launcher.sh --status
+
+# 停止服务器
+deploy/server-launcher.sh --kill
 ```
 
-管理服务器默认在 http://localhost:31457 启动。
+#### Windows环境：
+
+```powershell
+# 使用批处理文件启动
+deploy\server-launcher.bat
+
+# 查看所有可用选项
+deploy\server-launcher.bat --help
+
+# 检查服务器状态
+deploy\server-launcher.bat --status
+
+# 停止服务器
+deploy\server-launcher.bat --kill
+```
+
+启动脚本会显示可用的访问URL，包括：
+- 本地访问：http://localhost:31457
+- 远程访问：http://[服务器IP]:31457
+
+#### 设置系统服务（可选）
+
+##### Linux（systemd）:
+
+创建systemd服务文件：
+
+```bash
+sudo cat > /etc/systemd/system/gosynflood-manager.service << EOF
+[Unit]
+Description=GOSYNFLOOD-UNION Attack Manager Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/gosynflood-union
+ExecStart=/root/gosynflood-union/bin/attack-server -config /root/gosynflood-union/backend/config.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 重新加载systemd配置
+sudo systemctl daemon-reload
+
+# 启动服务
+sudo systemctl start gosynflood-manager
+
+# 设置开机自启动
+sudo systemctl enable gosynflood-manager
+
+# 查看服务状态
+sudo systemctl status gosynflood-manager
+```
+
+##### Windows服务（使用NSSM）:
+
+1. 下载NSSM（Non-Sucking Service Manager）: https://nssm.cc/download
+2. 解压后，使用管理员权限运行cmd:
+
+```cmd
+C:\path\to\nssm.exe install GOSYNFLOOD-MANAGER "E:\path\to\gosynflood-union\bin\attack-server.exe" "-config E:\path\to\gosynflood-union\backend\config.json"
+C:\path\to\nssm.exe set GOSYNFLOOD-MANAGER AppDirectory "E:\path\to\gosynflood-union"
+C:\path\to\nssm.exe start GOSYNFLOOD-MANAGER
+```
 
 ### 2. 部署前端（生产环境）
 
@@ -297,6 +387,15 @@ http://[管理服务器IP]:31457
 2. 确认管理服务器URL配置正确
 3. 验证API密钥与管理平台中的设置匹配
 4. 检查管理服务器日志中的错误信息
+5. 如果使用0.0.0.0地址绑定，确保服务器防火墙允许31457端口的访问
+
+#### 无法从远程访问管理界面
+
+1. 确认配置文件中的`host`设置为"0.0.0.0"
+2. 检查服务器防火墙是否允许31457端口的入站连接
+3. 尝试使用服务器的实际IP地址而不是localhost
+4. 运行`bin/start-server.sh --status`检查服务器是否正在运行
+5. 查看日志文件（默认为`logs/server.log`）获取详细错误信息
 
 #### 攻击任务创建后无法启动
 
