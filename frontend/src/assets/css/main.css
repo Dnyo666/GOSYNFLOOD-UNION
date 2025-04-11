@@ -1,0 +1,135 @@
+/* 全局样式 */
+:root {
+  --primary-color: #4CAF50;
+  --danger-color: #f44336;
+  --text-color: #333;
+  --text-light: #666;
+  --bg-color: #f5f5f5;
+  --bg-card: #fff;
+  --border-color: #ddd;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Arial', sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin-top: 0;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* 通用布局类 */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+/* 辅助类 */
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.mb-1 {
+  margin-bottom: 10px;
+}
+
+.mb-2 {
+  margin-bottom: 20px;
+}
+
+.mt-1 {
+  margin-top: 10px;
+}
+
+.mt-2 {
+  margin-top: 20px;
+}
+
+/* 按钮样式 */
+.btn {
+  display: inline-block;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  transition: background-color 0.3s;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: white;
+}
+
+.btn-secondary {
+  background-color: #f5f5f5;
+  color: var(--text-color);
+}
+
+/* 表单样式 */
+.form-control {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+}
+
+/* 列表样式 */
+.list-item {
+  padding: 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.list-item:last-child {
+  border-bottom: none;
+}
+
+/* 状态标签 */
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.badge-success {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+.badge-danger {
+  background-color: var(--danger-color);
+  color: white;
+} 

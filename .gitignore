@@ -1,0 +1,67 @@
+# Go忽略规则
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# 依赖目录
+/vendor/
+/gosynflood
+
+# 打包的二进制文件
+/bin/
+*.bin
+
+# Node.js忽略规则
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Vue.js构建输出
+/frontend/dist/
+/backend/static/
+
+# 环境变量和本地配置
+.env.local
+.env.*.local
+/backend/config.json
+
+# 数据和日志目录
+/data/
+/logs/
+*.log
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 编辑器和IDE文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# 临时文件和缓存
+.tmp/
+.cache/
+*.bak
+*.tmp
+*.temp
+
+# 个人开发配置文件
+notes.md
+TODO.md
+deploy_keys.json
