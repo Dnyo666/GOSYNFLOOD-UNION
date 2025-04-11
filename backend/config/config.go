@@ -11,6 +11,7 @@ import (
 // Config 应用配置
 type Config struct {
 	// 服务器设置
+	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	StaticDir      string `json:"staticDir"`
 	LogLevel       string `json:"logLevel"`
@@ -23,6 +24,7 @@ var AppConfig Config
 
 // 默认配置
 const (
+	defaultHost          = "0.0.0.0"
 	defaultPort           = 31457
 	defaultStaticDir      = "./static"
 	defaultLogLevel       = "info"
@@ -34,6 +36,7 @@ const (
 func LoadConfig(configFile string) error {
 	// 设置默认值
 	AppConfig = Config{
+		Host:           defaultHost,
 		Port:           defaultPort,
 		StaticDir:      defaultStaticDir,
 		LogLevel:       defaultLogLevel,
@@ -74,6 +77,11 @@ func loadFromFile(configFile string) error {
 
 // 从环境变量加载配置
 func loadFromEnv() {
+	// 服务器主机
+	if host := os.Getenv("AP_HOST"); host != "" {
+		AppConfig.Host = host
+	}
+	
 	// 服务器端口
 	if port := os.Getenv("AP_PORT"); port != "" {
 		if p, err := strconv.Atoi(port); err == nil {

@@ -580,7 +580,7 @@ func main() {
 
 	// 启动服务器
 	handler := c.Handler(r)
-	addr := fmt.Sprintf(":%d", config.AppConfig.Port)
+	addr := fmt.Sprintf("%s:%d", config.AppConfig.Host, config.AppConfig.Port)
 	log.Printf("服务器启动在 %s", addr)
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
