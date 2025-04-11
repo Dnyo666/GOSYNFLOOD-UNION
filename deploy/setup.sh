@@ -342,10 +342,23 @@ confirm_installation() {
 check_dependencies() {
     echo "检查依赖工具..."
     
+    # 先尝试激活已安装的Go（如果存在）
+    if [ -d "/usr/local/go/bin" ] && ! command -v go &> /dev/null; then
+        print_yellow "检测到Go安装目录，但PATH中未找到go命令，添加到PATH环境变量..."
+        export PATH=$PATH:/usr/local/go/bin
+    fi
+    
     # 检查 Go
     if ! command -v go &> /dev/null; then
         print_yellow "未检测到Go，将尝试自动安装Go 1.18..."
         install_go
+        
+        # 确保Go命令可用
+        if ! command -v go &> /dev/null; then
+            print_red "Go安装后仍然无法使用，可能是PATH环境变量未正确更新"
+            print_yellow "请手动运行: export PATH=\$PATH:/usr/local/go/bin"
+            export PATH=$PATH:/usr/local/go/bin
+        fi
     else
         # 检查Go版本
         GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
@@ -385,6 +398,13 @@ check_dependencies() {
 # 安装Go
 install_go() {
     print_blue "开始安装Go..."
+    
+    # 如果PATH中已经存在Go，则跳过安装
+    if command -v go &> /dev/null; then
+        GO_VERSION=$(go version)
+        print_green "Go已经安装: $GO_VERSION"
+        return 0
+    fi
     
     # 检测操作系统和架构
     case "$(uname -s)" in
@@ -637,11 +657,40 @@ build_backend() {
         echo "正在构建后端..."
         cd "$INSTALL_DIR/backend"
         
+        # 创建日志目录
+        mkdir -p "$INSTALL_DIR/logs"
+        BUILD_LOG="$INSTALL_DIR/logs/backend-build.log"
+        
         # 获取依赖
-        go mod tidy
+        echo "正在下载Go依赖..."
+        go mod tidy > "$BUILD_LOG" 2>&1 || {
+            print_red "Go依赖获取失败，查看日志获取详情: $BUILD_LOG"
+            cat "$BUILD_LOG"
+            exit 1
+        }
         
         # 构建服务器
-        go build -o "$INSTALL_DIR/bin/attack-server" main.go
+        echo "正在编译后端服务..."
+        go build -o "$INSTALL_DIR/bin/attack-server" main.go >> "$BUILD_LOG" 2>&1 || {
+            print_red "后端构建失败，查看日志获取详情: $BUILD_LOG"
+            print_yellow "可能是由于导入但未使用的包或其他编译错误。"
+            cat "$BUILD_LOG"
+            
+            # 尝试修复常见错误
+            if grep -q "imported and not used:" "$BUILD_LOG"; then
+                print_yellow "检测到导入但未使用的包，尝试修复并重新构建..."
+                
+                # 尝试再次构建，忽略未使用的导入
+                GOOS=linux go build -o "$INSTALL_DIR/bin/attack-server" main.go >> "$BUILD_LOG" 2>&1 || {
+                    print_red "修复后仍然构建失败，请手动修复错误。"
+                    exit 1
+                }
+                
+                print_green "使用修复后重新构建成功。"
+            else
+                exit 1
+            fi
+        }
         
         print_green "后端构建完成。"
     else

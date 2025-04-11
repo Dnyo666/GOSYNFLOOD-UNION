@@ -534,8 +534,12 @@ func getCommands(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// 添加命令行参数支持
+	configPath := flag.String("config", "config.json", "配置文件路径")
+	flag.Parse()
+	
 	// 加载配置
-	if err := config.LoadConfig("config.json"); err != nil {
+	if err := config.LoadConfig(*configPath); err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
