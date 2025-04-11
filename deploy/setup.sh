@@ -586,15 +586,44 @@ build_frontend() {
         echo "正在构建前端..."
         cd "$INSTALL_DIR/frontend"
         
-        # 安装依赖
-        npm install
+        # 创建构建日志目录
+        mkdir -p "$INSTALL_DIR/logs"
+        BUILD_LOG="$INSTALL_DIR/logs/frontend-build.log"
+        
+        # 安装依赖，抑制警告并记录日志
+        echo "安装npm依赖（这可能需要几分钟时间）..."
+        print_yellow "详细日志记录在: $BUILD_LOG"
+        npm install --no-fund --no-audit --loglevel=error > "$BUILD_LOG" 2>&1 || {
+            print_red "npm依赖安装失败，查看日志获取详情: $BUILD_LOG"
+            cat "$BUILD_LOG"
+            exit 1
+        }
         
         # 构建生产版本
-        npm run build
+        echo "构建前端应用..."
+        npm run build >> "$BUILD_LOG" 2>&1 || {
+            print_red "前端构建失败，查看日志获取详情: $BUILD_LOG"
+            cat "$BUILD_LOG"
+            exit 1
+        }
         
-        # 复制到静态目录
-        mkdir -p "$INSTALL_DIR/backend/static"
-        cp -r dist/* "$INSTALL_DIR/backend/static/"
+        # 检查dist目录是否存在
+        if [ -d "dist" ]; then
+            # 如果存在dist目录，复制到静态目录
+            print_green "将构建文件从dist目录复制到静态目录..."
+            mkdir -p "$INSTALL_DIR/backend/static"
+            cp -r dist/* "$INSTALL_DIR/backend/static/" 2>/dev/null || {
+                print_red "复制构建文件失败，请检查权限和路径。"
+            }
+        else
+            # 检查日志来确认构建是否成功
+            if grep -q "Build complete" "$BUILD_LOG" 2>/dev/null || [ -d "$INSTALL_DIR/backend/static" ]; then
+                print_green "前端已直接构建到 backend/static 目录，无需复制。"
+            else
+                print_red "前端构建可能失败，未找到构建输出目录。"
+                print_yellow "请检查 $BUILD_LOG 获取详细信息。"
+            fi
+        fi
         
         print_green "前端构建完成。"
     else
@@ -660,11 +689,50 @@ EOF
             echo "后端配置文件已存在，跳过创建。"
         fi
         
-        # 更新管理员令牌
-        AUTH_FILE="$INSTALL_DIR/backend/middleware/auth.go"
-        if [ -f "$AUTH_FILE" ] && [ ! -z "$ADMIN_TOKEN" ]; then
+        # 创建并更新middleware目录和auth.go文件
+        MIDDLEWARE_DIR="$INSTALL_DIR/backend/middleware"
+        AUTH_FILE="$MIDDLEWARE_DIR/auth.go"
+        
+        mkdir -p "$MIDDLEWARE_DIR"
+        
+        # 检查auth.go文件是否存在，如果不存在则创建
+        if [ ! -f "$AUTH_FILE" ]; then
+            echo "创建auth.go文件..."
+            cat > "$AUTH_FILE" << EOF
+package middleware
+
+import (
+	"net/http"
+)
+
+var (
+    AdminToken = "$ADMIN_TOKEN" 
+)
+
+// AdminAuthMiddleware 验证管理员令牌
+func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-Admin-Token")
+		if token != AdminToken {
+			http.Error(w, "未授权访问", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+EOF
+            print_green "Auth中间件文件已创建。"
+        else
+            # 更新管理员令牌
             echo "更新管理员令牌..."
-            sed -i "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" "$AUTH_FILE"
+            # 兼容不同平台的sed命令
+            if [[ "$(uname -s)" == Darwin* ]]; then
+                # macOS
+                sed -i '' "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" "$AUTH_FILE"
+            else
+                # Linux and other systems
+                sed -i "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" "$AUTH_FILE"
+            fi
             echo "管理员令牌已更新。"
         fi
     else
