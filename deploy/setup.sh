@@ -726,6 +726,7 @@ create_config() {
             echo "创建后端配置文件..."
             cat > "$CONFIG_FILE" << EOF
 {
+  "host": "0.0.0.0",
   "port": 31457,
   "staticDir": "./static",
   "logLevel": "info",
@@ -810,8 +811,8 @@ show_usage() {
         echo "请记录此令牌，用于添加服务器和创建攻击任务。"
         echo ""
         echo "启动管理服务器:"
-        echo "  cd $INSTALL_DIR/bin"
-        echo "  ./attack-server -config ../backend/config.json"
+        echo "  chmod +x $INSTALL_DIR/deploy/server-launcher.sh"
+        echo "  $INSTALL_DIR/deploy/server-launcher.sh"
         echo ""
         echo "访问Web界面:"
         echo "  http://localhost:31457"
@@ -832,6 +833,336 @@ show_usage() {
     
     echo ""
     print_blue "感谢使用GOSYNFLOOD-UNION攻击管理平台！"
+}
+
+# 创建启动脚本
+create_launcher_scripts() {
+    if [ "$INSTALL_MODE" = "manager" ]; then
+        echo "创建服务器启动脚本..."
+        
+        # 创建Linux启动脚本
+        LINUX_LAUNCHER="$INSTALL_DIR/deploy/server-launcher.sh"
+        cat > "$LINUX_LAUNCHER" << 'EOF'
+#!/bin/bash
+
+# 获取脚本所在目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$(dirname "$SCRIPT_DIR")"
+CONFIG_FILE="$INSTALL_DIR/backend/config.json"
+LOG_FILE="$INSTALL_DIR/logs/server.log"
+
+# 确保日志目录存在
+mkdir -p "$INSTALL_DIR/logs"
+mkdir -p "$INSTALL_DIR/bin"
+
+# 显示帮助信息
+show_help() {
+    echo "GOSYNFLOOD-UNION 管理服务器启动脚本"
+    echo
+    echo "用法: $0 [选项]"
+    echo
+    echo "选项:"
+    echo "  -c, --config <文件>    使用指定的配置文件"
+    echo "  -h, --help             显示此帮助信息"
+    echo "  -f, --foreground       在前台运行（不在后台运行）"
+    echo "  -s, --status           检查服务器状态"
+    echo "  -k, --kill             停止正在运行的服务器"
+    echo
+}
+
+# 获取服务器进程ID
+get_server_pid() {
+    pgrep -f "attack-server -config"
+}
+
+# 检查服务器状态
+check_status() {
+    PID=$(get_server_pid)
+    if [ -z "$PID" ]; then
+        echo "管理服务器未运行"
+        return 1
+    else
+        echo "管理服务器正在运行 (PID: $PID)"
+        return 0
+    fi
+}
+
+# 停止服务器
+stop_server() {
+    PID=$(get_server_pid)
+    if [ -z "$PID" ]; then
+        echo "管理服务器未运行"
+        return 0
+    else
+        echo "正在停止管理服务器 (PID: $PID)..."
+        kill "$PID"
+        sleep 2
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "服务器未响应，强制终止中..."
+            kill -9 "$PID"
+        fi
+        echo "管理服务器已停止"
+        return 0
+    fi
+}
+
+# 默认参数
+RUN_IN_BACKGROUND=true
+
+# 解析命令行参数
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c|--config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -f|--foreground)
+            RUN_IN_BACKGROUND=false
+            shift
+            ;;
+        -s|--status)
+            check_status
+            exit $?
+            ;;
+        -k|--kill)
+            stop_server
+            exit $?
+            ;;
+        *)
+            echo "错误: 未知选项 $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# 检查配置文件是否存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "错误: 配置文件 $CONFIG_FILE 不存在"
+    exit 1
+fi
+
+# 检查二进制文件是否存在
+if [ ! -f "$INSTALL_DIR/bin/attack-server" ]; then
+    echo "错误: 服务器二进制文件不存在。请确保已构建项目。"
+    exit 1
+fi
+
+# 检查服务器是否已在运行
+if check_status > /dev/null; then
+    echo "管理服务器已经在运行中"
+    echo "如需重新启动，请先停止现有服务器："
+    echo "$0 --kill"
+    exit 1
+fi
+
+# 启动服务器
+if [ "$RUN_IN_BACKGROUND" = true ]; then
+    echo "正在后台启动管理服务器..."
+    nohup "$INSTALL_DIR/bin/attack-server" -config "$CONFIG_FILE" > "$LOG_FILE" 2>&1 &
+    PID=$!
+    echo "管理服务器已启动 (PID: $PID)"
+    echo "日志文件: $LOG_FILE"
+    # 等待一会，确认服务器正常启动
+    sleep 2
+    if ! kill -0 $PID 2>/dev/null; then
+        echo "警告: 服务器可能未能正常启动，请检查日志文件"
+    else
+        echo "服务器已成功启动，可以通过以下地址访问："
+        # 获取服务器地址和端口
+        HOST=$(grep -o '"host": *"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+        PORT=$(grep -o '"port": *[0-9]*' "$CONFIG_FILE" | awk '{print $2}')
+        
+        echo "本地访问: http://localhost:$PORT"
+        
+        # 始终尝试显示所有可用IP地址
+        echo "远程访问:"
+        SERVER_IPS=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')
+        if [ -n "$SERVER_IPS" ]; then
+            echo "$SERVER_IPS" | while read -r ip; do
+                echo "  http://$ip:$PORT"
+            done
+        else
+            # 如果使用ip命令无法获取IP，尝试使用hostname命令
+            SERVER_IP=$(hostname -I | awk '{print $1}')
+            if [ -n "$SERVER_IP" ]; then
+                echo "  http://$SERVER_IP:$PORT"
+            else
+                echo "  无法获取服务器IP地址，请检查网络配置"
+            fi
+        fi
+    fi
+else
+    echo "正在前台启动管理服务器..."
+    "$INSTALL_DIR/bin/attack-server" -config "$CONFIG_FILE"
+fi
+EOF
+        chmod +x "$LINUX_LAUNCHER"
+        
+        # 创建Windows启动脚本
+        WINDOWS_LAUNCHER="$INSTALL_DIR/deploy/server-launcher.bat"
+        cat > "$WINDOWS_LAUNCHER" << 'EOF'
+@echo off
+setlocal enabledelayedexpansion
+
+:: 获取脚本所在目录
+set "SCRIPT_DIR=%~dp0"
+set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+set "INSTALL_DIR=%SCRIPT_DIR%\.."
+set "CONFIG_FILE=%INSTALL_DIR%\backend\config.json"
+set "LOG_FILE=%INSTALL_DIR%\logs\server.log"
+
+:: 确保日志目录存在
+if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
+if not exist "%INSTALL_DIR%\bin" mkdir "%INSTALL_DIR%\bin"
+
+:: 命令行参数处理
+set "RUN_IN_BACKGROUND=true"
+set "SHOW_HELP=false"
+set "CHECK_STATUS=false"
+set "KILL_SERVER=false"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--help" set "SHOW_HELP=true" & goto :args_done
+if /i "%~1"=="-h" set "SHOW_HELP=true" & goto :args_done
+if /i "%~1"=="--foreground" set "RUN_IN_BACKGROUND=false" & shift & goto :parse_args
+if /i "%~1"=="-f" set "RUN_IN_BACKGROUND=false" & shift & goto :parse_args
+if /i "%~1"=="--status" set "CHECK_STATUS=true" & goto :args_done
+if /i "%~1"=="-s" set "CHECK_STATUS=true" & goto :args_done
+if /i "%~1"=="--kill" set "KILL_SERVER=true" & goto :args_done
+if /i "%~1"=="-k" set "KILL_SERVER=true" & goto :args_done
+if /i "%~1"=="--config" set "CONFIG_FILE=%~2" & shift & shift & goto :parse_args
+if /i "%~1"=="-c" set "CONFIG_FILE=%~2" & shift & shift & goto :parse_args
+echo 未知选项: %~1
+goto :show_help
+:args_done
+
+:: 显示帮助信息
+if "%SHOW_HELP%"=="true" goto :show_help
+
+:: 配置文件检查
+if not exist "%CONFIG_FILE%" (
+    echo 错误: 配置文件 %CONFIG_FILE% 不存在
+    exit /b 1
+)
+
+:: 检查二进制文件是否存在
+if not exist "%INSTALL_DIR%\bin\attack-server.exe" (
+    echo 错误: 服务器二进制文件不存在。请确保已构建项目。
+    exit /b 1
+)
+
+:: 查看服务器状态
+if "%CHECK_STATUS%"=="true" (
+    goto :check_status
+)
+
+:: 停止服务器
+if "%KILL_SERVER%"=="true" (
+    goto :stop_server
+)
+
+:: 检查服务器是否已在运行
+for /f "tokens=1" %%p in ('wmic process where "commandline like '%%attack-server%%'" get processid ^| findstr /r "[0-9]"') do (
+    set "PID=%%p"
+    goto :server_running
+)
+goto :start_server
+
+:server_running
+echo 管理服务器已经在运行中 (PID: !PID!)
+echo 如需重新启动，请先停止现有服务器：
+echo %~nx0 --kill
+exit /b 1
+
+:start_server
+:: 启动服务器
+if "%RUN_IN_BACKGROUND%"=="true" (
+    echo 正在后台启动管理服务器...
+    start /b cmd /c ""%INSTALL_DIR%\bin\attack-server.exe" -config "%CONFIG_FILE%" > "%LOG_FILE%" 2>&1"
+    
+    :: 等待一会确认服务器启动
+    timeout /t 2 > nul
+    
+    :: 显示访问信息
+    for /f "tokens=* usebackq" %%a in (`type "%CONFIG_FILE%" ^| findstr "port"`) do set "PORT_LINE=%%a"
+    
+    :: 提取端口
+    for /f "tokens=2 delims=:," %%a in ("!PORT_LINE!") do set "PORT=%%a"
+    
+    echo 服务器已启动！
+    echo 日志文件: %LOG_FILE%
+    echo.
+    echo 服务器可通过以下地址访问:
+    echo 本地访问: http://localhost:!PORT!
+    
+    :: 始终显示可用的IP地址
+    echo 远程访问:
+    for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /r /c:"IPv4 Address"') do (
+        echo   http://%%i:!PORT!
+    )
+) else (
+    echo 正在前台启动管理服务器...
+    "%INSTALL_DIR%\bin\attack-server.exe" -config "%CONFIG_FILE%"
+)
+
+exit /b 0
+
+:check_status
+:: 检查服务器状态
+set "SERVER_RUNNING=false"
+for /f "tokens=1" %%p in ('wmic process where "commandline like '%%attack-server%%'" get processid ^| findstr /r "[0-9]"') do (
+    set "PID=%%p"
+    set "SERVER_RUNNING=true"
+)
+
+if "%SERVER_RUNNING%"=="true" (
+    echo 管理服务器正在运行 (PID: !PID!)
+    exit /b 0
+) else (
+    echo 管理服务器未运行
+    exit /b 1
+)
+
+:stop_server
+:: 停止服务器
+set "SERVER_RUNNING=false"
+for /f "tokens=1" %%p in ('wmic process where "commandline like '%%attack-server%%'" get processid ^| findstr /r "[0-9]"') do (
+    set "PID=%%p"
+    set "SERVER_RUNNING=true"
+)
+
+if "%SERVER_RUNNING%"=="true" (
+    echo 正在停止管理服务器 (PID: !PID!)...
+    taskkill /pid !PID! /f
+    echo 管理服务器已停止
+) else (
+    echo 管理服务器未运行
+)
+exit /b 0
+
+:show_help
+echo GOSYNFLOOD-UNION 管理服务器启动脚本
+echo.
+echo 用法: %~nx0 [选项]
+echo.
+echo 选项:
+echo   -c, --config ^<文件^>    使用指定的配置文件
+echo   -h, --help             显示此帮助信息
+echo   -f, --foreground       在前台运行（不在后台运行）
+echo   -s, --status           检查服务器状态
+echo   -k, --kill             停止正在运行的服务器
+echo.
+exit /b 0
+EOF
+        
+        print_green "启动脚本已创建。"
+    fi
 }
 
 # 主流程
@@ -900,4 +1231,5 @@ else
 fi
 
 create_config
+create_launcher_scripts
 show_usage 

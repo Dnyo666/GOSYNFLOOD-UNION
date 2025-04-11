@@ -131,13 +131,24 @@ if [ "$RUN_IN_BACKGROUND" = true ]; then
         # 获取服务器地址和端口
         HOST=$(grep -o '"host": *"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
         PORT=$(grep -o '"port": *[0-9]*' "$CONFIG_FILE" | awk '{print $2}')
-        if [ "$HOST" = "0.0.0.0" ]; then
-            # 显示所有IP地址
-            echo "本地访问: http://localhost:$PORT"
-            echo "远程访问:"
-            ip addr | grep 'inet ' | grep -v '127.0.0.1' | awk '{print "  http://" $2}' | cut -d'/' -f1 | awk -v port="$PORT" '{print $0 ":" port}'
+        
+        echo "本地访问: http://localhost:$PORT"
+        
+        # 始终尝试显示所有可用IP地址
+        echo "远程访问:"
+        SERVER_IPS=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')
+        if [ -n "$SERVER_IPS" ]; then
+            echo "$SERVER_IPS" | while read -r ip; do
+                echo "  http://$ip:$PORT"
+            done
         else
-            echo "http://$HOST:$PORT"
+            # 如果使用ip命令无法获取IP，尝试使用hostname命令
+            SERVER_IP=$(hostname -I | awk '{print $1}')
+            if [ -n "$SERVER_IP" ]; then
+                echo "  http://$SERVER_IP:$PORT"
+            else
+                echo "  无法获取服务器IP地址，请检查网络配置"
+            fi
         fi
     fi
 else

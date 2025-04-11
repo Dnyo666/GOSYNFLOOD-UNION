@@ -85,10 +85,7 @@ if "%RUN_IN_BACKGROUND%"=="true" (
     for /f "tokens=* usebackq" %%a in (`type "%CONFIG_FILE%" ^| findstr "host"`) do set "HOST_LINE=%%a"
     for /f "tokens=* usebackq" %%a in (`type "%CONFIG_FILE%" ^| findstr "port"`) do set "PORT_LINE=%%a"
     
-    for /f "tokens=2 delims=:," %%a in ("!HOST_LINE!") do set "HOST=%%a"
-    set "HOST=!HOST:"=!"
-    set "HOST=!HOST: =!"
-    
+    :: 提取端口
     for /f "tokens=2 delims=:," %%a in ("!PORT_LINE!") do set "PORT=%%a"
     
     echo 服务器已启动！
@@ -97,13 +94,10 @@ if "%RUN_IN_BACKGROUND%"=="true" (
     echo 服务器可通过以下地址访问:
     echo 本地访问: http://localhost:!PORT!
     
-    if "!HOST!"=="0.0.0.0" (
-        echo 远程访问:
-        for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /r /c:"IPv4 Address"') do (
-            echo   http://%%i:!PORT!
-        )
-    ) else (
-        echo http://!HOST!:!PORT!
+    :: 始终显示可用的IP地址
+    echo 远程访问:
+    for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /r /c:"IPv4 Address"') do (
+        echo   http://%%i:!PORT!
     )
 ) else (
     echo 正在前台启动管理服务器...

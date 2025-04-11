@@ -394,7 +394,7 @@ http://[管理服务器IP]:31457
 1. 确认配置文件中的`host`设置为"0.0.0.0"
 2. 检查服务器防火墙是否允许31457端口的入站连接
 3. 尝试使用服务器的实际IP地址而不是localhost
-4. 运行`bin/start-server.sh --status`检查服务器是否正在运行
+4. 运行`deploy/server-launcher.sh --status`检查服务器是否正在运行
 5. 查看日志文件（默认为`logs/server.log`）获取详细错误信息
 
 #### 攻击任务创建后无法启动

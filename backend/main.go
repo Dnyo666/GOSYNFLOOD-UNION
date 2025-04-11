@@ -582,6 +582,13 @@ func main() {
 	handler := c.Handler(r)
 	addr := fmt.Sprintf("%s:%d", config.AppConfig.Host, config.AppConfig.Port)
 	log.Printf("服务器启动在 %s", addr)
+	
+	// 显示服务器可访问地址
+	if config.AppConfig.Host == "0.0.0.0" || config.AppConfig.Host == "" {
+		log.Printf("本地访问: http://localhost:%d", config.AppConfig.Port)
+		log.Printf("要获取远程访问地址，请使用 'ip addr' 或 'hostname -I' 命令查看服务器IP地址")
+	}
+	
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 

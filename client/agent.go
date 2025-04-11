@@ -285,15 +285,16 @@ func detectInterfaces() []string {
 }
 
 func main() {
-	// 命令行参数
+	// 解析命令行参数
 	serverID := flag.Int("id", 0, "服务器ID")
 	apiKey := flag.String("key", "", "API密钥")
-	masterURL := flag.String("master", "http://localhost:8080", "管理平台URL")
-	toolsPath := flag.String("tools", "/usr/local/bin", "工具路径")
+	masterURL := flag.String("master", "http://localhost:31457", "管理服务器URL")
+	toolsPath := flag.String("tools", "/usr/local/bin", "gosynflood工具路径")
 	flag.Parse()
 
+	// 检查必要的参数
 	if *serverID == 0 || *apiKey == "" {
-		log.Fatal("必须提供服务器ID和API密钥")
+		log.Fatalf("必须提供服务器ID和API密钥")
 	}
 
 	// 初始化配置
@@ -304,30 +305,37 @@ func main() {
 		ToolsPath: *toolsPath,
 	}
 
-	// 打印启动信息
-	log.Printf("攻击代理已启动 (ID: %d)", config.ServerID)
-	log.Printf("连接到管理平台: %s", config.MasterURL)
+	// 检查工具是否存在
+	toolPath := filepath.Join(config.ToolsPath, "gosynflood")
+	if _, err := os.Stat(toolPath); os.IsNotExist(err) {
+		// 尝试在当前目录下查找工具
+		currentPath := "./gosynflood"
+		if _, err := os.Stat(currentPath); os.IsNotExist(err) {
+			log.Printf("警告: 在 %s 和当前目录未找到gosynflood工具", config.ToolsPath)
+			log.Printf("请确保工具已安装或提供正确的路径")
+		} else {
+			config.ToolsPath = "."
+			log.Printf("使用当前目录中的gosynflood工具")
+		}
+	}
 
-	// 检测可用的网络接口
-	interfaces := detectInterfaces()
-	log.Printf("检测到的网络接口: %v", interfaces)
+	// 显示启动信息
+	log.Printf("启动GOSYNFLOOD攻击代理")
+	log.Printf("服务器ID: %d", config.ServerID)
+	log.Printf("管理服务器: %s", config.MasterURL)
+	log.Printf("工具路径: %s", config.ToolsPath)
 
-	// 设置信号处理
+	// 设置信号处理以优雅退出
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		sig := <-sigCh
-		log.Printf("收到信号: %v，正在停止...", sig)
+		<-sigCh
+		log.Println("接收到退出信号，正在清理...")
 		stopAttack()
 		os.Exit(0)
 	}()
 
-	// 启动心跳发送
+	// 启动心跳和命令监听
 	go sendHeartbeat()
-
-	// 启动命令监听
-	go listenForCommands()
-
-	// 保持程序运行
-	select {}
+	listenForCommands()
 } 
