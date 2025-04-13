@@ -342,239 +342,119 @@ confirm_installation() {
 check_dependencies() {
     echo "检查依赖工具..."
     
-    # 先尝试激活已安装的Go（如果存在）
-    if [ -d "/usr/local/go/bin" ] && ! command -v go &> /dev/null; then
-        print_yellow "检测到Go安装目录，但PATH中未找到go命令，添加到PATH环境变量..."
-        export PATH=$PATH:/usr/local/go/bin
-    fi
-    
-    # 检查 Go
+    # 检查Go是否安装
     if ! command -v go &> /dev/null; then
-        print_yellow "未检测到Go，将尝试自动安装Go 1.18..."
-        install_go
-        
-        # 确保Go命令可用
-        if ! command -v go &> /dev/null; then
-            print_red "Go安装后仍然无法使用，可能是PATH环境变量未正确更新"
-            print_yellow "请手动运行: export PATH=\$PATH:/usr/local/go/bin"
-            export PATH=$PATH:/usr/local/go/bin
-        fi
-    else
-        # 检查Go版本
-        GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-        GO_MAJOR=$(echo $GO_VERSION | cut -d. -f1)
-        GO_MINOR=$(echo $GO_VERSION | cut -d. -f2)
-        
-        if [ "$GO_MAJOR" -lt 1 ] || ([ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 15 ]); then
-            print_yellow "检测到Go版本为 $GO_VERSION，低于要求的1.15版本。"
-            read -p "是否更新到最新版本？[Y/n]: " update_go
-            if [[ ! "$update_go" =~ ^[Nn]$ ]]; then
-                install_go
-            else
-                print_yellow "继续使用当前Go版本，可能会影响部分功能。"
-            fi
-        else
-            print_green "已安装Go $GO_VERSION，符合要求。"
-        fi
+        print_red "错误: 未安装Go，请先安装Go"
+        exit 1
     fi
     
-    if [ "$INSTALL_MODE" = "manager" ]; then
-        # 仅在管理服务器模式下检查 Node.js 和 npm
-        if [ "$BUILD_FRONTEND" = true ] && ! command -v node &> /dev/null; then
-            print_red "错误: Node.js 未安装。请安装 Node.js 14 或更高版本。"
-            print_yellow "提示: 可以访问 https://nodejs.org/ 下载安装Node.js"
+    # 获取Go版本
+    GO_VERSION=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\(\.[0-9]\+\)*' | cut -c 3-)
+    GO_MAJOR=$(echo $GO_VERSION | cut -d. -f1)
+    GO_MINOR=$(echo $GO_VERSION | cut -d. -f2)
+    
+    echo "已安装Go $GO_VERSION"
+    
+    # 检查Go版本是否满足需求
+    if [ "$GO_MAJOR" -lt 1 ] || ([ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 15 ]); then
+        print_red "错误: Go版本过低，需要1.15及以上版本"
+        exit 1
+    fi
+    
+    # 如果Go版本低于1.18，但高于或等于1.15，自动修改go.mod文件
+    if [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 18 ]; then
+        echo "检测到Go版本低于1.18，将自动修改go.mod文件以兼容当前版本..."
+        
+        # 修改主go.mod文件
+        if [ -f "go.mod" ]; then
+            sed -i 's/go 1.18/go 1.15/' go.mod
+            echo "已更新 go.mod"
+        fi
+        
+        # 修改backend的go.mod文件
+        if [ -f "backend/go.mod" ]; then
+            sed -i 's/go 1.18/go 1.15/' backend/go.mod
+            echo "已更新 backend/go.mod"
+        fi
+        
+        # 修改client的go.mod文件
+        if [ -f "client/go.mod" ]; then
+            sed -i 's/go 1.18/go 1.15/' client/go.mod
+            echo "已更新 client/go.mod"
+        fi
+    fi
+
+    # 检查Node.js (仅在manager模式下)
+    if [ "$INSTALL_MODE" = "manager" ] && [ "$BUILD_FRONTEND" = true ]; then
+        if ! command -v node &> /dev/null; then
+            print_red "错误: 未安装Node.js，前端构建需要Node.js"
+            print_yellow "您可以使用 --no-frontend 选项跳过前端构建，或安装Node.js后重试"
             exit 1
         fi
         
-        if [ "$BUILD_FRONTEND" = true ] && ! command -v npm &> /dev/null; then
-            print_red "错误: npm 未安装。请安装 npm。"
+        # 检查npm
+        if ! command -v npm &> /dev/null; then
+            print_red "错误: 未安装npm，前端构建需要npm"
             exit 1
         fi
     fi
     
-    print_green "依赖检查完成。"
+    echo "依赖检查完成。"
 }
 
-# 安装Go
-install_go() {
-    print_blue "开始安装Go..."
-    
-    # 如果PATH中已经存在Go，则跳过安装
-    if command -v go &> /dev/null; then
-        GO_VERSION=$(go version)
-        print_green "Go已经安装: $GO_VERSION"
-        return 0
-    fi
-    
-    # 检测操作系统和架构
-    case "$(uname -s)" in
-        Linux*)     OS="linux" ;;
-        Darwin*)    OS="darwin" ;;
-        MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
-        *)          
-            print_red "不支持的操作系统: $(uname -s)"
-            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
-            exit 1 
-            ;;
-    esac
-    
-    ARCH="$(uname -m)"
-    case $ARCH in
-        x86_64)
-            ARCH="amd64"
-            ;;
-        aarch64|arm64)
-            ARCH="arm64"
-            ;;
-        *)
-            print_red "不支持的系统架构: $ARCH"
-            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
-            exit 1
-            ;;
-    esac
-    
-    # 设置Go版本
-    GO_VERSION="1.18.10"
-    
-    # Windows平台特殊处理
-    if [ "$OS" = "windows" ]; then
-        print_yellow "检测到Windows系统，将下载安装程序..."
-        print_yellow "安装完成后请重新运行此脚本。"
+# 验证管理服务器URL (仅agent模式)
+validate_manager_url() {
+    if [ "$INSTALL_MODE" = "agent" ] && [ -n "$MANAGER_URL" ]; then
+        echo "验证管理服务器URL..."
         
-        # Windows使用zip或msi
-        GO_DOWNLOAD_URL="https://golang.org/dl/go${GO_VERSION}.windows-${ARCH}.zip"
+        # 从URL中提取主机和端口
+        HOST=$(echo $MANAGER_URL | sed -E 's|^https?://([^/:]+)(:[0-9]+)?.*|\1|')
+        PORT=$(echo $MANAGER_URL | grep -o ':[0-9]\+' | cut -c 2-)
         
-        # 临时目录
-        TMP_DIR="${TEMP:-/tmp}"
-        GO_ZIP="$TMP_DIR/go.zip"
-        
-        echo "下载Go $GO_VERSION (windows-$ARCH)..."
-        if command -v curl &> /dev/null; then
-            curl -L $GO_DOWNLOAD_URL -o $GO_ZIP
-        elif command -v wget &> /dev/null; then
-            wget -O $GO_ZIP $GO_DOWNLOAD_URL
-        else
-            print_red "错误: 需要curl或wget来下载Go"
-            print_yellow "请访问 https://golang.org/dl/ 手动下载安装"
-            exit 1
-        fi
-        
-        if [ ! -f $GO_ZIP ]; then
-            print_red "下载失败，请手动安装Go: https://golang.org/dl/"
-            exit 1
-        fi
-        
-        # 解压目录
-        GO_INSTALL_DIR="${LOCALAPPDATA:-$HOME}/go"
-        
-        # 确保目录存在
-        mkdir -p "$GO_INSTALL_DIR"
-        
-        print_blue "正在解压Go到 $GO_INSTALL_DIR..."
-        if command -v unzip &> /dev/null; then
-            unzip -q -o $GO_ZIP -d "$GO_INSTALL_DIR"
-        else
-            print_red "未找到unzip工具，无法解压Go安装包"
-            print_yellow "请手动解压 $GO_ZIP 到 $GO_INSTALL_DIR"
-            exit 1
-        fi
-        
-        # 添加到PATH（Windows特有）
-        print_yellow "请确保将以下路径添加到系统环境变量PATH中:"
-        print_yellow "$GO_INSTALL_DIR\\go\\bin"
-        
-        # 设置临时环境变量
-        export PATH="$GO_INSTALL_DIR/go/bin:$PATH"
-        
-        # 验证安装
-        if command -v go &> /dev/null; then
-            GO_VERSION=$(go version)
-            print_green "Go安装成功: $GO_VERSION"
-        else
-            print_red "Go安装后无法在PATH中找到"
-            print_yellow "请确保添加 $GO_INSTALL_DIR\\go\\bin 到PATH环境变量并重启终端"
-            exit 1
-        fi
-    else
-        # Linux/macOS安装流程
-        GO_DOWNLOAD_URL="https://golang.org/dl/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
-        
-        # 临时目录
-        TMP_DIR=$(mktemp -d)
-        GO_TAR="$TMP_DIR/go.tar.gz"
-        
-        echo "下载Go $GO_VERSION ($OS-$ARCH)..."
-        if command -v curl &> /dev/null; then
-            curl -L $GO_DOWNLOAD_URL -o $GO_TAR
-        elif command -v wget &> /dev/null; then
-            wget -O $GO_TAR $GO_DOWNLOAD_URL
-        else
-            print_red "错误: 需要curl或wget来下载Go"
-            exit 1
-        fi
-        
-        if [ ! -f $GO_TAR ]; then
-            print_red "下载失败，请手动安装Go: https://golang.org/dl/"
-            exit 1
-        fi
-        
-        # 默认安装目录
-        GO_INSTALL_DIR="/usr/local"
-        
-        # 检查是否有权限写入安装目录
-        if [ ! -w "$GO_INSTALL_DIR" ]; then
-            print_yellow "需要管理员权限安装Go到 $GO_INSTALL_DIR"
-            if [ "$OS" = "linux" ] || [ "$OS" = "darwin" ]; then
-                print_blue "使用sudo安装Go..."
-                sudo tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+        # 如果未指定端口，使用默认端口31457
+        if [ -z "$PORT" ]; then
+            PORT=31457
+            # 更新URL，添加默认端口
+            if [[ "$MANAGER_URL" == */ ]]; then
+                MANAGER_URL="${MANAGER_URL%/}:31457"
             else
-                print_red "请使用管理员权限运行安装程序，或手动安装Go"
-                exit 1
+                MANAGER_URL="$MANAGER_URL:31457"
             fi
-        else
-            tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+            print_yellow "未指定端口，使用默认管理服务器端口31457: $MANAGER_URL"
+        elif [ "$PORT" = "38721" ]; then
+            # 如果是前端开发服务器端口，警告并提供修正
+            print_red "警告: 端口38721通常是前端开发服务器端口，不是管理服务器API端口"
+            print_yellow "管理服务器API通常使用31457端口"
+            
+            # 询问是否要纠正端口
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "是否将端口修改为31457? [Y/n] " change_port
+                if [[ "$change_port" != "n" && "$change_port" != "N" ]]; then
+                    MANAGER_URL=$(echo $MANAGER_URL | sed 's/:38721/:31457/')
+                    print_blue "已更新管理服务器URL: $MANAGER_URL"
+                fi
+            else
+                # 在非交互模式下，自动修改端口并显示警告
+                MANAGER_URL=$(echo $MANAGER_URL | sed 's/:38721/:31457/')
+                print_yellow "已自动将端口修改为31457: $MANAGER_URL"
+            fi
         fi
         
-        # 清理临时文件
-        rm -rf $TMP_DIR
-        
-        # 设置PATH
-        if ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.bashrc 2>/dev/null && \
-           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.zshrc 2>/dev/null && \
-           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.profile 2>/dev/null; then
-            
-            print_yellow "将Go添加到环境变量PATH中..."
-            
-            if [ -f ~/.profile ]; then
-                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
-                print_green "已添加到 ~/.profile"
-            fi
-            
-            if [ -f ~/.bashrc ]; then
-                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-                print_green "已添加到 ~/.bashrc"
-            fi
-            
-            if [ -f ~/.zshrc ]; then
-                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.zshrc
-                print_green "已添加到 ~/.zshrc"
-            fi
-            
-            print_yellow "请运行以下命令使PATH变量立即生效，或重启终端:"
-            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
-        fi
-        
-        # 临时添加到当前会话的PATH
-        export PATH=$PATH:/usr/local/go/bin
-        
-        # 验证安装
-        if command -v go &> /dev/null; then
-            GO_VERSION=$(go version)
-            print_green "Go安装成功: $GO_VERSION"
+        # 尝试连接管理服务器
+        echo "尝试连接到管理服务器..."
+        if curl -s --connect-timeout 5 "$MANAGER_URL/api/servers" > /dev/null; then
+            print_green "管理服务器连接成功！"
         else
-            print_red "Go安装后无法在PATH中找到，请手动添加 /usr/local/go/bin 到PATH环境变量"
-            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
-            exit 1
+            print_red "警告: 无法连接到管理服务器 $MANAGER_URL"
+            print_yellow "请确保管理服务器已启动并可访问"
+            print_yellow "您可以继续安装，但代理可能无法连接到管理服务器"
+            
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "是否继续安装? [Y/n] " continue_install
+                if [[ "$continue_install" = "n" || "$continue_install" = "N" ]]; then
+                    exit 1
+                fi
+            fi
         fi
     fi
 }
@@ -1185,6 +1065,7 @@ if [ "$INTERACTIVE" = true ]; then
         configure_manager
     else
         configure_agent
+        validate_manager_url  # 验证管理服务器URL
     fi
     
     confirm_installation
@@ -1211,6 +1092,7 @@ else
         echo "管理服务器URL: $MANAGER_URL"
         echo "代理ID: $AGENT_ID"
         echo "API密钥: $AGENT_KEY"
+        validate_manager_url  # 验证管理服务器URL
         # 攻击代理模式下默认只构建客户端
         BUILD_FRONTEND=false
         BUILD_BACKEND=false
