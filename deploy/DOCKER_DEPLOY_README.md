@@ -16,13 +16,13 @@
    - 添加了构建验证步骤，检查并显示Vue输出目录配置
    - 修复了前端构建产物路径问题，从`/app/dist/`修改为`/app/backend/static/`
    - 添加了错误处理和构建日志，便于排查问题
-   - 显式处理Go依赖，特别是gorilla/mux依赖问题
+   - 显式处理Go依赖，特别是自动添加gorilla/mux依赖到go.mod文件
 
 3. **部署脚本新增**:
    - 添加了Linux/Mac脚本(`deploy/docker-deploy.sh`)和Windows脚本(`deploy/docker-deploy.bat`)
    - 脚本提供了详细的部署过程反馈和错误处理
    - 自动处理依赖项检查、文件权限设置、构建缓存清理等常见问题
-   - 添加了自动修复Go依赖问题的功能
+   - 添加了自动修复Go依赖问题的功能，包括检查并添加缺失的依赖
 
 ## 快速部署步骤
 
@@ -58,8 +58,9 @@ deploy\docker-deploy.bat
 ```bash
 # 预处理Go依赖
 cd backend
+# 检查并添加gorilla/mux依赖
+grep -q "github.com/gorilla/mux" go.mod || echo "require github.com/gorilla/mux v1.8.0" >> go.mod
 go mod tidy
-go mod download github.com/gorilla/mux
 go mod download
 cd ..
 
@@ -88,21 +89,25 @@ ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
    docker-compose up -d
    ```
 
-2. **Go依赖问题(missing go.sum entry)**:
+2. **Go依赖问题(missing go.sum entry或not a known dependency)**:
    ```
    go: github.com/gorilla/mux@v1.8.0: missing go.sum entry
+   go: module github.com/gorilla/mux: not a known dependency
    ```
    
    解决方案: 
    ```bash
+   # 添加缺失的gorilla/mux依赖
+   echo "require github.com/gorilla/mux v1.8.0" >> backend/go.mod
+   
    # 确保go.sum文件存在
    touch backend/go.sum
    touch go.sum
    
    # 下载依赖
    cd backend
-   go mod download github.com/gorilla/mux
    go mod tidy
+   go mod download
    cd ..
    
    # 重新构建

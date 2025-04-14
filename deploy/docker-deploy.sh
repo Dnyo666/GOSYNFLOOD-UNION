@@ -85,16 +85,23 @@ fi
 # 预处理Go依赖
 if [ -f "backend/go.mod" ]; then
     info "预处理Go模块依赖..."
-    if command -v go &> /dev/null; then
-        # 使用本地Go安装预处理依赖
-        (cd backend && go mod tidy && go mod download github.com/gorilla/mux && go mod download) || warn "本地预处理Go依赖失败，将在Docker中尝试"
-    else
-        warn "未检测到本地Go安装，将在Docker中处理依赖"
-    fi
     
     # 确保go.sum文件存在
     touch backend/go.sum
     touch go.sum
+    
+    # 先检查是否有gorilla/mux依赖，没有就添加
+    if ! grep -q "github.com/gorilla/mux" backend/go.mod; then
+        info "添加缺失的gorilla/mux依赖到go.mod..."
+        echo "require github.com/gorilla/mux v1.8.0" >> backend/go.mod
+    fi
+    
+    if command -v go &> /dev/null; then
+        # 使用本地Go安装预处理依赖
+        (cd backend && go mod tidy && go mod download) || warn "本地预处理Go依赖失败，将在Docker中尝试"
+    else
+        warn "未检测到本地Go安装，将在Docker中处理依赖"
+    fi
 fi
 
 # 检查backend/config.json是否存在

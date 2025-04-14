@@ -13,9 +13,12 @@ COPY backend/go.mod ./backend/
 RUN touch go.sum
 RUN touch backend/go.sum
 
-# 先处理后端依赖，显式下载gorilla/mux
-RUN cd backend && go mod tidy && \
-    go mod download github.com/gorilla/mux && \
+# 先处理后端依赖，先添加gorilla/mux依赖，再进行依赖管理
+RUN cd backend && \
+    # 检查并添加gorilla/mux依赖
+    grep -q "github.com/gorilla/mux" go.mod || echo "require github.com/gorilla/mux v1.8.0" >> go.mod && \
+    # 整理依赖并下载
+    go mod tidy && \
     go mod download
 
 # 复制后端源代码
@@ -64,7 +67,14 @@ RUN mkdir -p /app/bin /app/data /app/backend/static
 
 # 从构建阶段复制构建产物
 COPY --from=backend-builder /app/bin/attack-server /app/bin/
-COPY --from=frontend-builder /app/backend/static/ /app/backend/static/ || true
+
+# 使用一个单独的RUN命令处理可能的复制失败情况
+RUN mkdir -p /app/backend/static
+
+# 复制前端构建产物(如果存在)
+COPY --from=frontend-builder /app/backend/static/ /app/backend/static/
+
+# 复制配置文件
 COPY backend/config.json /app/backend/
 
 # 设置默认的管理员令牌（在启动时可以通过环境变量覆盖）

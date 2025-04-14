@@ -95,20 +95,6 @@ if not exist "frontend" (
 REM 预处理Go依赖
 if exist "backend\go.mod" (
     call :info "预处理Go模块依赖..."
-    where go >nul 2>nul
-    if %ERRORLEVEL% equ 0 (
-        REM 使用本地Go预处理依赖
-        pushd backend
-        go mod tidy 
-        go mod download github.com/gorilla/mux 
-        go mod download
-        popd
-        if %ERRORLEVEL% neq 0 (
-            call :warn "本地预处理Go依赖失败，将在Docker中尝试"
-        )
-    ) else (
-        call :warn "未检测到本地Go安装，将在Docker中处理依赖"
-    )
     
     REM 确保go.sum文件存在
     if not exist "backend\go.sum" (
@@ -116,6 +102,27 @@ if exist "backend\go.mod" (
     )
     if not exist "go.sum" (
         echo. > go.sum
+    )
+    
+    REM 检查是否已有gorilla/mux依赖
+    findstr /C:"github.com/gorilla/mux" backend\go.mod >nul
+    if %ERRORLEVEL% neq 0 (
+        call :info "添加缺失的gorilla/mux依赖到go.mod..."
+        echo require github.com/gorilla/mux v1.8.0 >> backend\go.mod
+    )
+    
+    where go >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        REM 使用本地Go预处理依赖
+        pushd backend
+        go mod tidy 
+        go mod download
+        popd
+        if %ERRORLEVEL% neq 0 (
+            call :warn "本地预处理Go依赖失败，将在Docker中尝试"
+        )
+    ) else (
+        call :warn "未检测到本地Go安装，将在Docker中处理依赖"
     )
 )
 
