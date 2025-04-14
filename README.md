@@ -546,18 +546,53 @@ git pull
 
 ### 快速开始
 
+#### 方法一：使用部署脚本（推荐）
+
+我们提供了一个简便的部署脚本，可以自动处理常见的Docker部署问题：
+
+**Linux/Mac环境**:
+```bash
+# 为脚本添加执行权限
+chmod +x deploy/docker-deploy.sh
+
+# 使用随机生成的管理员令牌运行
+./deploy/docker-deploy.sh
+
+# 或使用自定义管理员令牌
+./deploy/docker-deploy.sh --token your-secure-token
+```
+
+**Windows环境**:
+```cmd
+# 使用随机生成的管理员令牌运行
+deploy\docker-deploy.bat
+
+# 或使用自定义管理员令牌
+deploy\docker-deploy.bat --token your-secure-token
+```
+
+部署脚本会自动：
+- 检查必要的Docker环境
+- 清理旧的Docker构建缓存
+- 确保项目目录权限正确
+- 构建并启动容器
+- 提供详细的状态反馈和错误处理
+
+#### 方法二：手动部署
+
+如果您不想使用部署脚本，也可以手动执行以下步骤：
+
 1. 创建`docker-compose.yml`文件：
 
 ```yaml
-version: '3.8'
-
 services:
   attack-manager:
+    container_name: gosynflood-manager
     build:
       context: .
       dockerfile: Dockerfile
-    image: gosynflood-manager:latest
-    container_name: gosynflood-manager
+      no_cache: true
+    image: gosynflood-manager:local
     ports:
       - "31457:31457"
     volumes:
@@ -581,26 +616,30 @@ WORKDIR /app
 # 安装必要的构建工具
 RUN apk add --no-cache git
 
-# 复制后端Go模块文件并下载依赖
+# 复制Go模块文件
 COPY go.mod ./
 COPY backend/go.mod ./backend/
-RUN cd backend && go mod download
+
+# 先处理后端依赖
+RUN cd backend && go mod tidy && go mod download
 
 # 复制后端源代码
 COPY backend/ ./backend/
 COPY *.go ./
 
 # 构建后端
-RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -o /app/bin/attack-server main.go
+RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/attack-server main.go
 
 # 前端构建阶段
 FROM node:16-alpine AS frontend-builder
 
 WORKDIR /app
 
-# 复制前端依赖文件并安装依赖
+# 复制前端依赖文件
 COPY frontend/package*.json ./
-RUN npm install --no-fund --no-audit
+
+# 安装依赖
+RUN npm install --no-fund --no-audit --production=false
 
 # 复制前端源代码
 COPY frontend/ ./
@@ -621,7 +660,7 @@ RUN mkdir -p /app/bin /app/data /app/backend/static
 
 # 从构建阶段复制构建产物
 COPY --from=backend-builder /app/bin/attack-server /app/bin/
-COPY --from=frontend-builder /app/dist/ /app/backend/static/
+COPY --from=frontend-builder /app/backend/static/ /app/backend/static/
 COPY backend/config.json /app/backend/
 
 # 设置默认的管理员令牌（在启动时可以通过环境变量覆盖）
@@ -641,15 +680,20 @@ RUN echo '#!/bin/sh\n\n# 更新管理员令牌\nif [ ! -z "$ADMIN_TOKEN" ]; then
 CMD ["/app/start.sh"]
 ```
 
-3. 启动管理服务器：
+3. 执行构建和部署命令：
 
 ```bash
-# 使用随机生成的安全令牌启动
-ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
+# 清理旧的构建缓存（可选但推荐）
+docker builder prune -f
 
-# 或使用指定的令牌启动
-ADMIN_TOKEN=your-secure-token docker-compose up -d
+# 先构建镜像（指定--no-cache避免使用缓存）
+ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose build --no-cache
+
+# 然后启动容器
+ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
 ```
+
+> **重要提示**：一定要先使用`docker-compose build`命令构建镜像，避免Docker尝试从远程仓库拉取不存在的镜像。
 
 4. 查看生成的管理员令牌：
 
@@ -676,9 +720,8 @@ docker-compose down
 # 重启服务
 docker-compose restart
 
-# 重建镜像
-docker-compose build --no-cache
-docker-compose up -d
+# 重建镜像并重启（完整重建）
+docker-compose build --no-cache && docker-compose up -d
 ```
 
 ### 与攻击节点集成
@@ -690,3 +733,76 @@ Docker部署的管理服务器可以与通过脚本安装的攻击节点协同�
 ```
 
 > **注意**：Docker部署方案完整包含了管理平台的前端、后端、API和管理功能，只是将它们运行在Docker容器中而非直接运行在主机系统上。数据持久化存储在Docker卷`gosynflood_attack_data`中，确保定期备份重要数据。
+
+### Docker部署故障排除
+
+如果您在Docker部署过程中遇到问题，以下是一些常见问题和解决方案：
+
+1. **找不到docker镜像错误**：如出现类似"requested access to the resource is denied"或"repository does not exist"错误：
+   ```bash
+   # 不要使用一步到位的命令：
+   # ADMIN_TOKEN=xxx docker-compose up -d
+   
+   # 请改用分步命令确保先构建再启动：
+   ADMIN_TOKEN=xxx docker-compose build --no-cache
+   ADMIN_TOKEN=xxx docker-compose up -d
+   
+   # 或使用我们提供的部署脚本
+   ./deploy/docker-deploy.sh
+   ```
+
+2. **Go依赖问题**：如果出现依赖错误，请按以下步骤操作：
+   ```bash
+   # 进入后端目录处理依赖
+   cd backend 
+   go mod tidy
+   go mod download
+   
+   # 回到根目录，重新构建
+   cd .. 
+   docker-compose build --no-cache
+   ```
+
+3. **前端构建失败**：如果前端构建阶段失败，可以尝试：
+   ```bash
+   # 清除Node.js缓存
+   docker builder prune -f
+   
+   # 确保frontend目录权限正确
+   chmod -R 755 frontend/
+   
+   # 重新构建
+   docker-compose build --no-cache
+   ```
+
+4. **前端构建产物路径错误**：如果遇到找不到`/app/dist/`的错误，这是因为Vue.js配置中的输出目录被设置为`/app/backend/static/`：
+   ```bash
+   # 查看Vue输出目录配置
+   cat frontend/vue.config.js | grep outputDir
+   
+   # 确保Dockerfile中的路径与Vue配置一致
+   # COPY --from=frontend-builder /app/backend/static/ /app/backend/static/
+   ```
+
+5. **容器启动失败**：如果容器无法启动，可以检查日志：
+   ```bash
+   docker logs gosynflood-manager
+   ```
+   
+   常见原因包括：
+   - 端口31457已被占用：修改docker-compose.yml中的端口映射
+   - 权限问题：确保数据卷挂载点有正确权限
+
+6. **管理员令牌问题**：如果管理员令牌不起作用：
+   ```bash
+   # 停止并删除容器
+   docker-compose down
+   
+   # 使用明确的令牌重新启动
+   ADMIN_TOKEN="your-new-secure-token" docker-compose up -d
+   
+   # 确认令牌已更新
+   docker logs gosynflood-manager | grep "管理员令牌已更新"
+   ```
+
+7. **Docker Compose版本警告**：如果您看到关于`version`属性过时的警告，可以从docker-compose.yml中移除version行，或升级到Docker Compose V2。

@@ -5,32 +5,51 @@ WORKDIR /app
 # 安装必要的构建工具
 RUN apk add --no-cache git
 
-# 复制后端Go模块文件并下载依赖
+# 复制Go模块文件
 COPY go.mod ./
 COPY backend/go.mod ./backend/
-RUN cd backend && go mod download
+
+# 创建空的go.sum文件（如果不存在）
+RUN touch go.sum
+RUN touch backend/go.sum
+
+# 先处理后端依赖，显式下载gorilla/mux
+RUN cd backend && go mod tidy && \
+    go mod download github.com/gorilla/mux && \
+    go mod download
 
 # 复制后端源代码
 COPY backend/ ./backend/
 COPY *.go ./
 
 # 构建后端
-RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -o /app/bin/attack-server main.go
+RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/attack-server main.go
 
 # 前端构建阶段
 FROM node:16-alpine AS frontend-builder
 
 WORKDIR /app
 
-# 复制前端依赖文件并安装依赖
+# 复制前端依赖文件
 COPY frontend/package*.json ./
-RUN npm install --no-fund --no-audit
+
+# 安装依赖
+RUN npm install --no-fund --no-audit --production=false
 
 # 复制前端源代码
 COPY frontend/ ./
 
+# 显示Vue配置以验证输出目录
+RUN cat vue.config.js | grep outputDir || echo "No vue.config.js found or no outputDir specified"
+
+# 确保目标目录存在
+RUN mkdir -p backend/static
+
 # 构建前端
 RUN npm run build
+
+# 验证构建产物
+RUN ls -la && ls -la backend/static || echo "No backend/static directory found"
 
 # 最终阶段
 FROM alpine:3.16
@@ -45,7 +64,7 @@ RUN mkdir -p /app/bin /app/data /app/backend/static
 
 # 从构建阶段复制构建产物
 COPY --from=backend-builder /app/bin/attack-server /app/bin/
-COPY --from=frontend-builder /app/dist/ /app/backend/static/
+COPY --from=frontend-builder /app/backend/static/ /app/backend/static/ || true
 COPY backend/config.json /app/backend/
 
 # 设置默认的管理员令牌（在启动时可以通过环境变量覆盖）

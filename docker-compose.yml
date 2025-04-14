@@ -1,12 +1,11 @@
-version: '3.8'
-
 services:
   attack-manager:
+    container_name: gosynflood-manager
     build:
       context: .
       dockerfile: Dockerfile
-    image: gosynflood-manager:latest
-    container_name: gosynflood-manager
+      no_cache: true
+    image: gosynflood-manager:local
     ports:
       - "31457:31457"
     volumes:
