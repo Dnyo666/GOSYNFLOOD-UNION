@@ -416,42 +416,158 @@ check_dependencies() {
         fi
     fi
 
-    # 检查Node.js (仅在manager模式下)
+    # 检查Node.js (仅在manager模式和BUILD_FRONTEND为true时)
     if [ "$INSTALL_MODE" = "manager" ] && [ "$BUILD_FRONTEND" = true ]; then
-        if ! command -v node &> /dev/null; then
-            print_red "错误: 未安装Node.js，前端构建需要Node.js"
-            print_yellow "您可以使用 --no-frontend 选项跳过前端构建，或安装Node.js后重试"
-            if [ "$INTERACTIVE" = true ]; then
-                read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
-                if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
-                    exit 1
-                else
-                    BUILD_FRONTEND=false
-                    print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
-                fi
-            else
-                exit 1
-            fi
-        fi
-        
-        # 检查npm
-        if [ "$BUILD_FRONTEND" = true ] && ! command -v npm &> /dev/null; then
-            print_red "错误: 未安装npm，前端构建需要npm"
-            if [ "$INTERACTIVE" = true ]; then
-                read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
-                if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
-                    exit 1
-                else
-                    BUILD_FRONTEND=false
-                    print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
-                fi
-            else
-                exit 1
-            fi
-        fi
+        check_nodejs
     fi
     
     echo "依赖检查完成。"
+}
+
+# 检查Node.js和npm
+check_nodejs() {
+    if ! command -v node &> /dev/null; then
+        print_yellow "未检测到Node.js，前端构建需要Node.js环境"
+        
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "是否尝试安装Node.js？[Y/n]: " install_nodejs_choice
+            if [[ "$install_nodejs_choice" =~ ^[Nn]$ ]]; then
+                read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
+                if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
+                    exit 1
+                else
+                    BUILD_FRONTEND=false
+                    print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+                    return 0
+                fi
+            else
+                install_nodejs
+            fi
+        else
+            print_red "未检测到Node.js，无法构建前端"
+            BUILD_FRONTEND=false
+            print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+            return 0
+        fi
+    fi
+    
+    # 检查npm
+    if ! command -v npm &> /dev/null; then
+        print_yellow "检测到Node.js但未检测到npm，尝试安装npm..."
+        install_nodejs
+    fi
+    
+    # 验证Node.js和npm版本
+    NODE_VERSION=$(node -v | cut -c 2-)
+    NPM_VERSION=$(npm -v)
+    
+    NODE_MAJOR=$(echo $NODE_VERSION | cut -d. -f1)
+    
+    echo "已安装Node.js $NODE_VERSION 和 npm $NPM_VERSION"
+    
+    # 检查Node.js版本是否符合要求
+    if [ "$NODE_MAJOR" -lt 12 ]; then
+        print_yellow "警告: Node.js版本较低 (v$NODE_VERSION)，推荐使用v12或更高版本"
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "是否更新Node.js？[Y/n]: " update_nodejs
+            if [[ ! "$update_nodejs" =~ ^[Nn]$ ]]; then
+                install_nodejs
+                # 重新获取Node.js版本
+                NODE_VERSION=$(node -v | cut -c 2-)
+                NPM_VERSION=$(npm -v)
+                print_green "已更新至Node.js $NODE_VERSION 和 npm $NPM_VERSION"
+            fi
+        fi
+    fi
+}
+
+# 安装Node.js和npm
+install_nodejs() {
+    print_blue "开始安装Node.js..."
+    
+    # 检测操作系统类型
+    OS=""
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    elif [ -f /etc/debian_version ]; then
+        OS="debian"
+    elif [ -f /etc/redhat-release ]; then
+        OS="centos"
+    elif [[ "$(uname)" == "Darwin" ]]; then
+        OS="darwin"
+    elif [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "MSYS"* || "$(uname -s)" == "CYGWIN"* ]]; then
+        OS="windows"
+    fi
+    
+    echo "检测到操作系统: $OS"
+    
+    case $OS in
+        debian|ubuntu)
+            print_blue "使用apt安装Node.js..."
+            curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            ;;
+            
+        rhel|centos|fedora)
+            print_blue "使用yum安装Node.js..."
+            curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
+            sudo yum install -y nodejs
+            ;;
+            
+        darwin)
+            print_blue "使用Homebrew安装Node.js..."
+            if command -v brew &> /dev/null; then
+                brew install node
+            else
+                print_yellow "未检测到Homebrew，准备通过NVM安装Node.js..."
+                curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh | bash
+                # 加载NVM
+                export NVM_DIR="$HOME/.nvm"
+                [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+                nvm install 16
+                nvm use 16
+            fi
+            ;;
+            
+        windows)
+            print_blue "Windows环境请手动安装Node.js..."
+            print_yellow "从https://nodejs.org/下载并安装Node.js 16.x LTS版本"
+            print_yellow "安装完成后重新运行此脚本"
+            exit 1
+            ;;
+            
+        *)
+            print_yellow "未能识别的操作系统，尝试使用NVM安装Node.js..."
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh | bash
+            # 加载NVM
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            nvm install 16
+            nvm use 16
+            ;;
+    esac
+    
+    # 验证安装
+    if command -v node &> /dev/null && command -v npm &> /dev/null; then
+        NODE_VERSION=$(node -v)
+        NPM_VERSION=$(npm -v)
+        print_green "Node.js和npm安装成功: Node.js $NODE_VERSION, npm $NPM_VERSION"
+    else
+        print_red "Node.js安装未成功完成"
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
+            if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
+                exit 1
+            else
+                BUILD_FRONTEND=false
+                print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+            fi
+        else
+            BUILD_FRONTEND=false
+            print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+        fi
+    fi
 }
 
 # 安装Go
@@ -679,51 +795,58 @@ get_source_code() {
 build_frontend() {
     if [ "$BUILD_FRONTEND" = true ] && [ "$INSTALL_MODE" = "manager" ]; then
         echo "正在构建前端..."
-        cd "$INSTALL_DIR/frontend"
         
         # 创建构建日志目录
         mkdir -p "$INSTALL_DIR/logs"
         BUILD_LOG="$INSTALL_DIR/logs/frontend-build.log"
         
-        # 安装依赖，抑制警告并记录日志
-        echo "安装npm依赖（这可能需要几分钟时间）..."
-        print_yellow "详细日志记录在: $BUILD_LOG"
-        npm install --no-fund --no-audit --loglevel=error > "$BUILD_LOG" 2>&1 || {
-            print_red "npm依赖安装失败，查看日志获取详情: $BUILD_LOG"
-            cat "$BUILD_LOG"
-            exit 1
-        }
-        
-        # 构建生产版本
-        echo "构建前端应用..."
-        npm run build >> "$BUILD_LOG" 2>&1 || {
-            print_red "前端构建失败，查看日志获取详情: $BUILD_LOG"
-            cat "$BUILD_LOG"
-            exit 1
-        }
-        
-        # 检查dist目录是否存在
-        if [ -d "dist" ]; then
-            # 如果存在dist目录，复制到静态目录
-            print_green "将构建文件从dist目录复制到静态目录..."
-            mkdir -p "$INSTALL_DIR/backend/static"
-            cp -r dist/* "$INSTALL_DIR/backend/static/" 2>/dev/null || {
-                print_red "复制构建文件失败，请检查权限和路径。"
-            }
-        else
-            # 检查日志来确认构建是否成功
-            if grep -q "Build complete" "$BUILD_LOG" 2>/dev/null || [ -d "$INSTALL_DIR/backend/static" ]; then
-                print_green "前端已直接构建到 backend/static 目录，无需复制。"
-            else
-                print_red "前端构建可能失败，未找到构建输出目录。"
-                print_yellow "请检查 $BUILD_LOG 获取详细信息。"
-            fi
-        fi
-        
-        print_green "前端构建完成。"
+        # 使用常规构建方式
+        build_frontend_normal
     else
         echo "跳过前端构建。"
     fi
+}
+
+# 常规方式构建前端
+build_frontend_normal() {
+    cd "$INSTALL_DIR/frontend"
+    
+    # 安装依赖，抑制警告并记录日志
+    echo "安装npm依赖（这可能需要几分钟时间）..."
+    print_yellow "详细日志记录在: $BUILD_LOG"
+    npm install --no-fund --no-audit --loglevel=error > "$BUILD_LOG" 2>&1 || {
+        print_red "npm依赖安装失败，查看日志获取详情: $BUILD_LOG"
+        cat "$BUILD_LOG"
+        exit 1
+    }
+    
+    # 构建生产版本
+    echo "构建前端应用..."
+    npm run build >> "$BUILD_LOG" 2>&1 || {
+        print_red "前端构建失败，查看日志获取详情: $BUILD_LOG"
+        cat "$BUILD_LOG"
+        exit 1
+    }
+    
+    # 检查dist目录是否存在
+    if [ -d "dist" ]; then
+        # 如果存在dist目录，复制到静态目录
+        print_green "将构建文件从dist目录复制到静态目录..."
+        mkdir -p "$INSTALL_DIR/backend/static"
+        cp -r dist/* "$INSTALL_DIR/backend/static/" 2>/dev/null || {
+            print_red "复制构建文件失败，请检查权限和路径。"
+        }
+    else
+        # 检查日志来确认构建是否成功
+        if grep -q "Build complete" "$BUILD_LOG" 2>/dev/null || [ -d "$INSTALL_DIR/backend/static" ]; then
+            print_green "前端已直接构建到 backend/static 目录，无需复制。"
+        else
+            print_red "前端构建可能失败，未找到构建输出目录。"
+            print_yellow "请检查 $BUILD_LOG 获取详细信息。"
+        fi
+    fi
+    
+    print_green "前端构建完成。"
 }
 
 # 构建后端

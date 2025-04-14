@@ -2,7 +2,39 @@
 
 这是一个基于gosynflood工具的分布式SYN洪水攻击管理平台，允许从一个中央控制台管理多个攻击服务器，并协调它们进行分布式攻击。
 
-> **更新说明**: 启动脚本现已移至`deploy`目录，可通过`deploy/server-launcher.sh`（Linux/macOS）或`deploy\server-launcher.bat`（Windows）运行。bin目录在.gitignore中，因此启动脚本不会在该目录中被版本控制。
+> **更新说明**: 
+> 1. 启动脚本现已移至`deploy`目录，可通过`deploy/server-launcher.sh`（Linux/macOS）或`deploy\\server-launcher.bat`（Windows）运行。bin目录在.gitignore中，因此启动脚本不会在该目录中被版本控制。
+> 2. 增强了安装脚本，添加了Node.js自动检测和安装功能，并支持使用Docker构建前端。
+> 3. 支持在无Node.js环境的情况下，自动切换到Docker构建前端，大大提高了部署灵活性。
+
+## 自动依赖检测
+
+安装脚本现在支持自动检测和安装以下依赖：
+
+1. **Go**：安装脚本会检测并安装Go环境，确保版本兼容性
+2. **Node.js**：对于管理模式安装，脚本会检测Node.js环境，必要时提供安装选项
+   - 如检测不到Node.js，脚本会提示是否安装
+   - 支持通过系统包管理器（apt、yum等）或NVM进行安装
+   - 自动验证Node.js版本是否满足要求（建议v12+）
+3. **Docker支持**：如果系统中没有Node.js但有Docker，脚本会自动使用Docker构建前端
+   - 脚本会自动创建必要的Dockerfile
+   - 使用Docker隔离构建环境，避免污染系统
+   - 构建完成后自动将产物复制到正确位置
+
+## 安装选项
+
+安装时可以使用以下选项：
+
+```bash
+./deploy/setup.sh --help
+```
+
+特别说明：
+- 使用 `--no-frontend` 可跳过前端构建
+- 使用 `--non-interactive` 进行自动安装，此模式下：
+  - 如果检测不到Node.js但有Docker，会自动使用Docker构建前端
+  - 如果检测不到Node.js也没有Docker，会自动跳过前端构建
+- 如果在交互模式下检测不到Node.js，会询问是否安装Node.js或跳过前端构建
 
 ## 警告
 
@@ -502,3 +534,159 @@ git pull
 ## 许可
 
 本项目采用MIT许可证。请参阅LICENSE文件获取详情。
+
+## Docker部署管理平台
+
+除了使用安装脚本，您还可以使用Docker一键部署完整的管理平台。**这是一个完全独立的部署方案**，与常规的脚本安装互不影响。此方法**仅适用于管理服务器**，节点机仍需使用常规安装方式。
+
+### 前提条件
+
+- 已安装Docker (17.09.0+)
+- 已安装Docker Compose (1.17.0+)
+
+### 快速开始
+
+1. 创建`docker-compose.yml`文件：
+
+```yaml
+version: '3.8'
+
+services:
+  attack-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gosynflood-manager:latest
+    container_name: gosynflood-manager
+    ports:
+      - "31457:31457"
+    volumes:
+      - attack_data:/app/data
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-change-me-to-secure-token}
+    restart: unless-stopped
+
+volumes:
+  attack_data:
+    name: gosynflood_attack_data
+```
+
+2. 创建`Dockerfile`：
+
+```dockerfile
+FROM golang:1.18-alpine AS backend-builder
+
+WORKDIR /app
+
+# 安装必要的构建工具
+RUN apk add --no-cache git
+
+# 复制后端Go模块文件并下载依赖
+COPY go.mod ./
+COPY backend/go.mod ./backend/
+RUN cd backend && go mod download
+
+# 复制后端源代码
+COPY backend/ ./backend/
+COPY *.go ./
+
+# 构建后端
+RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -o /app/bin/attack-server main.go
+
+# 前端构建阶段
+FROM node:16-alpine AS frontend-builder
+
+WORKDIR /app
+
+# 复制前端依赖文件并安装依赖
+COPY frontend/package*.json ./
+RUN npm install --no-fund --no-audit
+
+# 复制前端源代码
+COPY frontend/ ./
+
+# 构建前端
+RUN npm run build
+
+# 最终阶段
+FROM alpine:3.16
+
+WORKDIR /app
+
+# 安装运行时依赖
+RUN apk add --no-cache ca-certificates tzdata
+
+# 创建必要的目录
+RUN mkdir -p /app/bin /app/data /app/backend/static
+
+# 从构建阶段复制构建产物
+COPY --from=backend-builder /app/bin/attack-server /app/bin/
+COPY --from=frontend-builder /app/dist/ /app/backend/static/
+COPY backend/config.json /app/backend/
+
+# 设置默认的管理员令牌（在启动时可以通过环境变量覆盖）
+ENV ADMIN_TOKEN="change-me-to-secure-token"
+
+# 创建并配置auth.go文件
+RUN mkdir -p /app/backend/middleware
+RUN echo 'package middleware\n\nimport (\n\t"net/http"\n)\n\nvar (\n    AdminToken = "'$ADMIN_TOKEN'" \n)\n\n// AdminAuthMiddleware 验证管理员令牌\nfunc AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {\n\treturn func(w http.ResponseWriter, r *http.Request) {\n\t\ttoken := r.Header.Get("X-Admin-Token")\n\t\tif token != AdminToken {\n\t\t\thttp.Error(w, "未授权访问", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext(w, r)\n\t}\n}' > /app/backend/middleware/auth.go
+
+# 暴露服务端口
+EXPOSE 31457
+
+# 创建启动脚本
+RUN echo '#!/bin/sh\n\n# 更新管理员令牌\nif [ ! -z "$ADMIN_TOKEN" ]; then\n  sed -i "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" /app/backend/middleware/auth.go\n  echo "管理员令牌已更新"\nfi\n\n# 启动服务器\ncd /app\nexec /app/bin/attack-server -config /app/backend/config.json\n' > /app/start.sh && chmod +x /app/start.sh
+
+# 设置启动命令
+CMD ["/app/start.sh"]
+```
+
+3. 启动管理服务器：
+
+```bash
+# 使用随机生成的安全令牌启动
+ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
+
+# 或使用指定的令牌启动
+ADMIN_TOKEN=your-secure-token docker-compose up -d
+```
+
+4. 查看生成的管理员令牌：
+
+```bash
+docker logs gosynflood-manager | grep "管理员令牌已更新"
+```
+
+5. 访问管理界面：
+   - 本地访问：http://localhost:31457
+   - 远程访问：http://<服务器IP>:31457
+
+### Docker管理命令
+
+```bash
+# 查看容器状态
+docker ps -a --filter "name=gosynflood-manager"
+
+# 查看容器日志
+docker logs gosynflood-manager
+
+# 停止服务
+docker-compose down
+
+# 重启服务
+docker-compose restart
+
+# 重建镜像
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+### 与攻击节点集成
+
+Docker部署的管理服务器可以与通过脚本安装的攻击节点协同工作。在攻击节点上使用以下命令安装客户端代理：
+
+```bash
+./deploy/setup.sh --mode=agent --manager-url="http://管理服务器IP:31457" --agent-id=1 --agent-key="从管理界面获取的API密钥"
+```
+
+> **注意**：Docker部署方案完整包含了管理平台的前端、后端、API和管理功能，只是将它们运行在Docker容器中而非直接运行在主机系统上。数据持久化存储在Docker卷`gosynflood_attack_data`中，确保定期备份重要数据。
