@@ -342,10 +342,30 @@ confirm_installation() {
 check_dependencies() {
     echo "检查依赖工具..."
     
+    # 先尝试激活已安装的Go（如果存在）
+    if [ -d "/usr/local/go/bin" ] && ! command -v go &> /dev/null; then
+        print_yellow "检测到Go安装目录，但PATH中未找到go命令，添加到PATH环境变量..."
+        export PATH=$PATH:/usr/local/go/bin
+    fi
+    
     # 检查Go是否安装
     if ! command -v go &> /dev/null; then
-        print_red "错误: 未安装Go，请先安装Go"
-        exit 1
+        print_yellow "未检测到Go，将尝试自动安装Go..."
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "是否自动安装Go？[Y/n]: " auto_install_go
+            if [[ "$auto_install_go" =~ ^[Nn]$ ]]; then
+                print_red "错误: Go未安装，安装已取消"
+                exit 1
+            fi
+        fi
+        install_go
+        
+        # 确保Go命令可用
+        if ! command -v go &> /dev/null; then
+            print_red "Go安装后仍然无法使用，可能是PATH环境变量未正确更新"
+            print_yellow "请手动运行: export PATH=\$PATH:/usr/local/go/bin"
+            export PATH=$PATH:/usr/local/go/bin
+        fi
     fi
     
     # 获取Go版本
@@ -358,7 +378,19 @@ check_dependencies() {
     # 检查Go版本是否满足需求
     if [ "$GO_MAJOR" -lt 1 ] || ([ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 15 ]); then
         print_red "错误: Go版本过低，需要1.15及以上版本"
-        exit 1
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "是否安装新版本Go？[Y/n]: " update_go
+            if [[ "$update_go" =~ ^[Nn]$ ]]; then
+                exit 1
+            else
+                install_go
+                # 重新获取Go版本
+                GO_VERSION=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\(\.[0-9]\+\)*' | cut -c 3-)
+                print_green "已更新至Go $GO_VERSION"
+            fi
+        else
+            exit 1
+        fi
     fi
     
     # 如果Go版本低于1.18，但高于或等于1.15，自动修改go.mod文件
@@ -389,17 +421,180 @@ check_dependencies() {
         if ! command -v node &> /dev/null; then
             print_red "错误: 未安装Node.js，前端构建需要Node.js"
             print_yellow "您可以使用 --no-frontend 选项跳过前端构建，或安装Node.js后重试"
-            exit 1
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
+                if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
+                    exit 1
+                else
+                    BUILD_FRONTEND=false
+                    print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+                fi
+            else
+                exit 1
+            fi
         fi
         
         # 检查npm
-        if ! command -v npm &> /dev/null; then
+        if [ "$BUILD_FRONTEND" = true ] && ! command -v npm &> /dev/null; then
             print_red "错误: 未安装npm，前端构建需要npm"
-            exit 1
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "是否继续安装（跳过前端构建）？[Y/n]: " skip_frontend
+                if [[ "$skip_frontend" =~ ^[Nn]$ ]]; then
+                    exit 1
+                else
+                    BUILD_FRONTEND=false
+                    print_yellow "已将BUILD_FRONTEND设置为false，将跳过前端构建"
+                fi
+            else
+                exit 1
+            fi
         fi
     fi
     
     echo "依赖检查完成。"
+}
+
+# 安装Go
+install_go() {
+    print_blue "开始安装Go..."
+    
+    # 如果PATH中已经存在Go，则跳过安装
+    if command -v go &> /dev/null; then
+        GO_VERSION=$(go version)
+        print_green "Go已经安装: $GO_VERSION"
+        return 0
+    fi
+    
+    # 检测操作系统和架构
+    case "$(uname -s)" in
+        Linux*)     OS="linux" ;;
+        Darwin*)    OS="darwin" ;;
+        MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
+        *)          
+            print_red "不支持的操作系统: $(uname -s)"
+            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
+            exit 1 
+            ;;
+    esac
+    
+    ARCH="$(uname -m)"
+    case $ARCH in
+        x86_64)
+            ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            ARCH="arm64"
+            ;;
+        *)
+            print_red "不支持的系统架构: $ARCH"
+            print_yellow "请手动安装Go 1.15+: https://golang.org/dl/"
+            exit 1
+            ;;
+    esac
+    
+    # 设置Go版本
+    GO_VERSION="1.18.10"
+    
+    if [ "$OS" = "linux" ]; then
+        # Linux安装流程
+        GO_DOWNLOAD_URL="https://golang.org/dl/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
+        BACKUP_URLS=(
+            "https://golang.google.cn/dl/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
+            "https://gomirrors.org/dl/go/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
+            "https://mirrors.aliyun.com/golang/go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
+        )
+        
+        # 临时目录
+        TMP_DIR=$(mktemp -d)
+        GO_TAR="$TMP_DIR/go.tar.gz"
+        
+        echo "下载Go $GO_VERSION ($OS-$ARCH)..."
+        
+        # 尝试从主URL下载
+        download_success=false
+        if command -v curl &> /dev/null; then
+            curl -L $GO_DOWNLOAD_URL -o $GO_TAR --connect-timeout 10 &> /dev/null && download_success=true
+        elif command -v wget &> /dev/null; then
+            wget -O $GO_TAR $GO_DOWNLOAD_URL --timeout=10 &> /dev/null && download_success=true
+        fi
+        
+        # 如果主URL下载失败，尝试备用URL
+        if [ "$download_success" = false ]; then
+            print_yellow "从主URL下载失败，尝试备用镜像..."
+            for url in "${BACKUP_URLS[@]}"; do
+                print_yellow "尝试从 $url 下载..."
+                if command -v curl &> /dev/null; then
+                    curl -L $url -o $GO_TAR --connect-timeout 10 &> /dev/null && { download_success=true; break; }
+                elif command -v wget &> /dev/null; then
+                    wget -O $GO_TAR $url --timeout=10 &> /dev/null && { download_success=true; break; }
+                fi
+            done
+        fi
+        
+        if [ "$download_success" = false ]; then
+            print_red "无法下载Go安装包，请手动安装Go: https://golang.org/dl/"
+            rm -rf $TMP_DIR
+            exit 1
+        fi
+        
+        # 默认安装目录
+        GO_INSTALL_DIR="/usr/local"
+        
+        # 检查是否有权限写入安装目录
+        if [ ! -w "$GO_INSTALL_DIR" ]; then
+            print_yellow "需要管理员权限安装Go到 $GO_INSTALL_DIR"
+            print_blue "使用sudo安装Go..."
+            sudo tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+        else
+            tar -C $GO_INSTALL_DIR -xzf $GO_TAR
+        fi
+        
+        # 清理临时文件
+        rm -rf $TMP_DIR
+        
+        # 设置PATH
+        if ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.bashrc 2>/dev/null && \
+           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.zshrc 2>/dev/null && \
+           ! grep -q "export PATH=\$PATH:/usr/local/go/bin" ~/.profile 2>/dev/null; then
+            
+            print_yellow "将Go添加到环境变量PATH中..."
+            
+            if [ -f ~/.profile ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
+                print_green "已添加到 ~/.profile"
+            fi
+            
+            if [ -f ~/.bashrc ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+                print_green "已添加到 ~/.bashrc"
+            fi
+            
+            if [ -f ~/.zshrc ]; then
+                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.zshrc
+                print_green "已添加到 ~/.zshrc"
+            fi
+            
+            print_yellow "请运行以下命令使PATH变量立即生效，或重启终端:"
+            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
+        fi
+        
+        # 临时添加到当前会话的PATH
+        export PATH=$PATH:/usr/local/go/bin
+        
+        # 验证安装
+        if command -v go &> /dev/null; then
+            GO_VERSION=$(go version)
+            print_green "Go安装成功: $GO_VERSION"
+        else
+            print_red "Go安装后无法在PATH中找到，请手动添加 /usr/local/go/bin 到PATH环境变量"
+            print_yellow "export PATH=\$PATH:/usr/local/go/bin"
+            exit 1
+        fi
+    else
+        print_red "目前仅支持Linux自动安装Go"
+        print_yellow "请访问 https://golang.org/dl/ 手动下载并安装Go"
+        exit 1
+    fi
 }
 
 # 验证管理服务器URL (仅agent模式)
