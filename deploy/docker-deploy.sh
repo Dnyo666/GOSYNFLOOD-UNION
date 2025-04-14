@@ -304,6 +304,19 @@ else
     warn "找不到netstat或ss命令，无法检查端口占用情况"
 fi
 
+# 在构建前检查前端文件
+if [ -f "deploy/docker/debug-tools.sh" ]; then
+  info "检查前端构建环境..."
+  chmod +x deploy/docker/debug-tools.sh
+  ./deploy/docker/debug-tools.sh inspect
+
+  # 检测前端构建状态
+  if [ ! -d "backend/static" ] || [ -z "$(ls -A backend/static 2>/dev/null)" ]; then
+    warn "检测到前端文件可能有问题，尝试修复..."
+    ./deploy/docker/debug-tools.sh fix
+  fi
+fi
+
 # 开始构建
 info "开始构建Docker镜像（这可能需要几分钟）..."
 ADMIN_TOKEN=$ADMIN_TOKEN docker-compose build --no-cache

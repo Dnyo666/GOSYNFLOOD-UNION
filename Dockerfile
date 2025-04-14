@@ -33,26 +33,58 @@ FROM node:16-alpine AS frontend-builder
 
 WORKDIR /app
 
-# 复制前端依赖文件
-COPY frontend/package*.json ./
+# 安装构建工具和调试工具
+RUN apk add --no-cache curl jq tree
 
-# 安装依赖
-RUN npm install --no-fund --no-audit --production=false
+# 复制前端依赖文件并安装
+COPY frontend/package*.json ./frontend/
+RUN echo "=== 安装前端依赖 ===" && \
+    cd frontend && \
+    npm install --no-fund --no-audit --production=false && \
+    echo "依赖安装完成, node_modules 目录大小: $(du -sh node_modules | cut -f1)"
 
 # 复制前端源代码
-COPY frontend/ ./
+COPY frontend/ ./frontend/
 
 # 显示Vue配置以验证输出目录
-RUN cat vue.config.js | grep outputDir || echo "No vue.config.js found or no outputDir specified"
+RUN echo "=== Vue.js配置分析 ===" && \
+    if [ -f "frontend/vue.config.js" ]; then \
+      cat frontend/vue.config.js | grep outputDir; \
+      echo "Vue配置文件存在，准备构建前端"; \
+    else \
+      echo "警告: 找不到vue.config.js文件"; \
+    fi
 
-# 确保目标目录存在
-RUN mkdir -p backend/static
+# 确保目标目录存在并显示目录结构
+RUN mkdir -p backend/static && \
+    echo "=== 构建前目录结构 ===" && \
+    ls -la && \
+    echo "frontend目录:" && \
+    ls -la frontend
 
-# 构建前端
-RUN npm run build
+# 构建前端（在frontend目录下运行）并记录结果
+RUN cd frontend && \
+    echo "=== 开始构建前端 ===" && \
+    npm run build | tee /tmp/build.log || { \
+      echo "=== 构建失败! 显示错误日志 ==="; \
+      tail -n 50 /tmp/build.log; \
+      exit 1; \
+    }
 
 # 验证构建产物
-RUN ls -la && ls -la backend/static || echo "No backend/static directory found"
+RUN echo "=== 构建后目录结构 ===" && \
+    ls -la && \
+    echo "backend/static目录:" && \
+    ls -la backend/static 2>/dev/null || echo "backend/static目录不存在" && \
+    echo "前端构建产物文件数量: $(find backend/static -type f 2>/dev/null | wc -l)" && \
+    echo "前端构建产物文件列表(前10个):" && \
+    find backend/static -type f 2>/dev/null | sort | head -10
+
+# 为处理可能存在的Vue路径问题添加备份措施
+RUN if [ "$(find backend/static -type f 2>/dev/null | wc -l)" = "0" ] && [ -d "frontend/dist" ]; then \
+      echo "=== 检测到Vue可能将文件输出到frontend/dist目录，正在复制... ==="; \
+      cp -rv frontend/dist/* backend/static/ 2>/dev/null || echo "复制失败或目录为空"; \
+    fi
 
 # 最终阶段
 FROM alpine:3.16
@@ -68,11 +100,16 @@ RUN mkdir -p /app/bin /app/data /app/backend/static
 # 从构建阶段复制构建产物
 COPY --from=backend-builder /app/bin/attack-server /app/bin/
 
-# 使用一个单独的RUN命令处理可能的复制失败情况
-RUN mkdir -p /app/backend/static
-
-# 复制前端构建产物(如果存在)
+# 复制前端构建产物
 COPY --from=frontend-builder /app/backend/static/ /app/backend/static/
+
+# 确保静态目录有内容，如果没有创建一个临时页面
+RUN if [ -z "$(ls -A /app/backend/static 2>/dev/null)" ]; then \
+    echo "警告: 静态文件目录为空，创建临时页面" && \
+    echo '<html><body><h1>GOSYNFLOOD管理平台</h1><p>警告: 前端构建失败。</p></body></html>' > /app/backend/static/index.html; \
+    else \
+    echo "静态文件已复制，文件数: $(find /app/backend/static -type f | wc -l)"; \
+    fi
 
 # 复制配置文件
 COPY backend/config.json /app/backend/

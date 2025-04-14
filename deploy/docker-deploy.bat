@@ -293,6 +293,19 @@ if not exist "backend\static" (
     mkdir backend\static
 )
 
+REM 检查前端文件
+call :info "检查前端文件状态..."
+dir frontend\dist 2>nul >nul
+if %ERRORLEVEL% equ 0 (
+    call :info "检测到前端构建产物，确保它们被正确复制"
+    if exist "frontend\dist\index.html" (
+        call :info "复制前端构建产物到backend/static目录"
+        xcopy /E /Y frontend\dist\* backend\static\ >nul
+    )
+) else (
+    call :warn "未检测到前端构建产物，Docker构建将处理这个问题"
+)
+
 REM 开始构建
 call :info "开始构建Docker镜像（这可能需要几分钟）..."
 set ADMIN_TOKEN=%ADMIN_TOKEN%
