@@ -142,6 +142,152 @@ if not exist "backend\config.json" (
     ) > backend\config.json
 )
 
+REM 确保部署脚本目录存在
+if not exist "deploy\docker" (
+    call :info "创建部署脚本目录..."
+    mkdir deploy\docker
+)
+
+REM 检查并创建启动脚本
+call :info "确保启动脚本存在..."
+if not exist "deploy\docker\start.sh" (
+    call :info "创建启动脚本..."
+    (
+        echo #!/bin/sh
+        echo.
+        echo # 函数定义
+        echo log_info^(^) {
+        echo   echo "[INFO] $1"
+        echo }
+        echo.
+        echo log_warn^(^) {
+        echo   echo "[WARN] $1"
+        echo }
+        echo.
+        echo log_error^(^) {
+        echo   echo "[ERROR] $1"
+        echo }
+        echo.
+        echo log_success^(^) {
+        echo   echo "[SUCCESS] $1"
+        echo }
+        echo.
+        echo # 设置错误处理
+        echo set -e
+        echo.
+        echo # 处理信号，实现优雅关闭
+        echo trap_handler^(^) {
+        echo   log_info "接收到关闭信号，正在停止服务..."
+        echo   # 这里可以添加清理操作
+        echo   exit 0
+        echo }
+        echo.
+        echo # 注册信号处理器
+        echo trap 'trap_handler' INT TERM
+        echo.
+        echo # 显示容器信息
+        echo log_info "===================================="
+        echo log_info "    GOSYNFLOOD管理平台启动中..."
+        echo log_info "===================================="
+        echo log_info "版本: 1.0.0"
+        echo log_info "启动时间: $(date)"
+        echo log_info "服务端口: 31457"
+        echo.
+        echo # 更新管理员令牌
+        echo if [ ! -z "$ADMIN_TOKEN" ]; then
+        echo   sed -i "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" /app/backend/middleware/auth.go
+        echo   log_success "管理员令牌已更新"
+        echo else
+        echo   log_warn "未设置ADMIN_TOKEN环境变量，使用默认令牌"
+        echo fi
+        echo.
+        echo # 系统检查
+        echo log_info "执行系统检查..."
+        echo.
+        echo # 目录检查
+        echo for dir in "/app/bin" "/app/backend" "/app/backend/static" "/app/data"; do
+        echo   if [ ! -d "$dir" ]; then
+        echo     log_error "错误: 目录不存在: $dir"
+        echo     mkdir -p "$dir"
+        echo     log_info "已自动创建目录: $dir"
+        echo   fi
+        echo done
+        echo.
+        echo # 文件检查
+        echo if [ ! -f "/app/bin/attack-server" ]; then
+        echo   log_error "错误: 找不到服务器二进制文件: /app/bin/attack-server"
+        echo   log_error "请检查构建过程是否正确完成"
+        echo   exit 1
+        echo fi
+        echo.
+        echo if [ ! -f "/app/backend/config.json" ]; then
+        echo   log_error "错误: 找不到配置文件: /app/backend/config.json"
+        echo   cat ^> /app/backend/config.json ^<^< EOF
+        echo {
+        echo   "host": "0.0.0.0",
+        echo   "port": 31457,
+        echo   "staticDir": "./static",
+        echo   "logLevel": "info",
+        echo   "allowedOrigins": "*",
+        echo   "dataDir": "../data"
+        echo }
+        echo EOF
+        echo   log_info "已创建默认配置文件: /app/backend/config.json"
+        echo fi
+        echo.
+        echo # 验证静态文件目录
+        echo if [ -z "$(ls -A /app/backend/static 2^>/dev/null)" ]; then
+        echo   log_warn "警告: 静态文件目录为空，前端可能无法正常工作"
+        echo   mkdir -p /app/backend/static
+        echo   echo "^<html^>^<body^>^<h1^>GOSYNFLOOD管理平台^</h1^>^<p^>警告: 前端文件缺失，请检查构建过程。^</p^>^</body^>^</html^>" ^> /app/backend/static/index.html
+        echo   log_info "已创建临时前端页面"
+        echo fi
+        echo.
+        echo # 验证数据目录权限
+        echo if [ ! -w "/app/data" ]; then
+        echo   log_error "错误: 数据目录没有写入权限: /app/data"
+        echo   chmod 755 /app/data
+        echo   log_info "已尝试修复数据目录权限"
+        echo fi
+        echo.
+        echo # 记录环境信息
+        echo log_info "系统检查完成"
+        echo log_info "环境信息:"
+        echo log_info "Alpine版本: $(cat /etc/alpine-release)"
+        echo log_info "可用内存: $(free -m | grep Mem | awk '{print $2}') MB"
+        echo log_info "可用磁盘空间: $(df -h / | tail -1 | awk '{print $4}')"
+        echo.
+        echo # 启动服务器
+        echo log_success "所有检查通过，正在启动服务器..."
+        echo cd /app
+        echo exec /app/bin/attack-server -config /app/backend/config.json
+    ) > deploy\docker\start.sh
+    
+    REM 确保脚本使用Unix风格的换行符(LF)
+    call :info "转换启动脚本为Unix格式..."
+    call :info "注意: Windows环境下，请确保脚本在容器中有正确的执行权限"
+)
+
+REM 更新docker-compose.yml以使用新端口
+if exist "docker-compose.yml" (
+    call :info "检查docker-compose.yml端口配置..."
+    REM 读取现有端口配置
+    findstr /C:"31458:31457" docker-compose.yml >nul
+    if %ERRORLEVEL% equ 0 (
+        call :info "使用更新的端口映射: 31458:31457"
+        set "PORT_INFO=31458"
+    ) else (
+        findstr /C:"31457:31457" docker-compose.yml >nul
+        if %ERRORLEVEL% equ 0 (
+            call :info "使用默认端口映射: 31457:31457"
+            set "PORT_INFO=31457"
+        ) else (
+            call :warn "无法确定端口映射，假设使用31457"
+            set "PORT_INFO=31457"
+        )
+    )
+)
+
 REM 确保backend/static目录存在
 if not exist "backend\static" (
     mkdir backend\static
@@ -183,6 +329,31 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+REM 检查端口是否被占用
+call :info "检查端口占用情况..."
+set "PORT_OCCUPIED=0"
+for /f "tokens=*" %%a in ('netstat -ano ^| findstr "0.0.0.0:%PORT_INFO%"') do (
+    set "PORT_OCCUPIED=1"
+)
+
+if "%PORT_OCCUPIED%"=="1" (
+    call :warn "端口 %PORT_INFO% 已被占用，将尝试使用备用端口31459"
+    
+    REM 使用sed替换端口(Windows环境可能需要安装sed)
+    where sed >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        sed -i "s/%PORT_INFO%:31457/31459:31457/g" docker-compose.yml
+        if %ERRORLEVEL% equ 0 (
+            call :info "端口已更新为31459"
+            set "PORT_INFO=31459"
+        ) else (
+            call :warn "无法自动更新端口，请手动编辑docker-compose.yml文件"
+        )
+    ) else (
+        call :warn "未找到sed工具，无法自动更新端口配置，请手动编辑docker-compose.yml文件"
+    )
+)
+
 REM 启动容器
 call :info "构建成功，正在启动容器..."
 set ADMIN_TOKEN=%ADMIN_TOKEN%
@@ -209,7 +380,7 @@ REM 检查容器状态中是否包含"Up"
 echo %CONTAINER_STATUS% | findstr /C:"Up" >nul
 if %ERRORLEVEL% equ 0 (
     call :success "容器已成功启动！"
-    call :success "管理平台地址: http://localhost:31457"
+    call :success "管理平台地址: http://localhost:%PORT_INFO%"
     call :success "管理员令牌: %ADMIN_TOKEN%"
 ) else (
     call :error "容器可能未正确启动，请使用'docker logs gosynflood-manager'检查详细日志"

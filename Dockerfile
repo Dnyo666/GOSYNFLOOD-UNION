@@ -87,8 +87,9 @@ RUN echo 'package middleware\n\nimport (\n\t"net/http"\n)\n\nvar (\n    AdminTok
 # 暴露服务端口
 EXPOSE 31457
 
-# 创建启动脚本
-RUN echo '#!/bin/sh\n\n# 更新管理员令牌\nif [ ! -z "$ADMIN_TOKEN" ]; then\n  sed -i "s/AdminToken = \".*\"/AdminToken = \"$ADMIN_TOKEN\"/g" /app/backend/middleware/auth.go\n  echo "管理员令牌已更新"\nfi\n\n# 启动服务器\ncd /app\nexec /app/bin/attack-server -config /app/backend/config.json\n' > /app/start.sh && chmod +x /app/start.sh
+# 复制启动脚本并设置执行权限
+COPY deploy/docker/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # 设置启动命令
 CMD ["/app/start.sh"] 
