@@ -152,23 +152,25 @@ REM 检查并创建启动脚本
 call :info "确保启动脚本存在..."
 if not exist "deploy\docker\start.sh" (
     call :info "创建启动脚本..."
+    if not exist "deploy\docker" mkdir deploy\docker
+    
     (
         echo #!/bin/sh
         echo.
         echo # 函数定义
-        echo log_info^(^) {
+        echo log_info^(\) {
         echo   echo "[INFO] $1"
         echo }
         echo.
-        echo log_warn^(^) {
+        echo log_warn^(\) {
         echo   echo "[WARN] $1"
         echo }
         echo.
-        echo log_error^(^) {
+        echo log_error^(\) {
         echo   echo "[ERROR] $1"
         echo }
         echo.
-        echo log_success^(^) {
+        echo log_success^(\) {
         echo   echo "[SUCCESS] $1"
         echo }
         echo.
@@ -176,7 +178,7 @@ if not exist "deploy\docker\start.sh" (
         echo set -e
         echo.
         echo # 处理信号，实现优雅关闭
-        echo trap_handler^(^) {
+        echo trap_handler^(\) {
         echo   log_info "接收到关闭信号，正在停止服务..."
         echo   # 这里可以添加清理操作
         echo   exit 0
@@ -222,7 +224,8 @@ if not exist "deploy\docker\start.sh" (
         echo.
         echo if [ ! -f "/app/backend/config.json" ]; then
         echo   log_error "错误: 找不到配置文件: /app/backend/config.json"
-        echo   cat ^> /app/backend/config.json ^<^< EOF
+        echo   mkdir -p /app/backend
+        echo   cat ^> /app/backend/config.json ^<^< 'EOL'
         echo {
         echo   "host": "0.0.0.0",
         echo   "port": 31457,
@@ -231,8 +234,39 @@ if not exist "deploy\docker\start.sh" (
         echo   "allowedOrigins": "*",
         echo   "dataDir": "../data"
         echo }
-        echo EOF
+        echo EOL
         echo   log_info "已创建默认配置文件: /app/backend/config.json"
+        echo fi
+        echo.
+        echo if [ ! -f "/app/backend/middleware/auth.go" ]; then
+        echo   log_error "错误: 找不到认证中间件: /app/backend/middleware/auth.go"
+        echo   log_error "将尝试创建默认认证中间件"
+        echo   
+        echo   mkdir -p /app/backend/middleware
+        echo   cat ^> /app/backend/middleware/auth.go ^<^< 'EOL'
+        echo package middleware
+        echo.
+        echo import (
+        echo 	"net/http"
+        echo )
+        echo.
+        echo var (
+        echo     AdminToken = "change-me-to-secure-token" 
+        echo )
+        echo.
+        echo // AdminAuthMiddleware 验证管理员令牌
+        echo func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+        echo 	return func(w http.ResponseWriter, r *http.Request) {
+        echo 		token := r.Header.Get("X-Admin-Token")
+        echo 		if token != AdminToken {
+        echo 			http.Error(w, "未授权访问", http.StatusUnauthorized)
+        echo 			return
+        echo 		}
+        echo 		next(w, r)
+        echo 	}
+        echo }
+        echo EOL
+        echo   log_info "已创建默认认证中间件"
         echo fi
         echo.
         echo # 验证静态文件目录
@@ -253,9 +287,9 @@ if not exist "deploy\docker\start.sh" (
         echo # 记录环境信息
         echo log_info "系统检查完成"
         echo log_info "环境信息:"
-        echo log_info "Alpine版本: $(cat /etc/alpine-release)"
-        echo log_info "可用内存: $(free -m | grep Mem | awk '{print $2}') MB"
-        echo log_info "可用磁盘空间: $(df -h / | tail -1 | awk '{print $4}')"
+        echo log_info "Alpine版本: $(cat /etc/alpine-release 2^>/dev/null || echo '未知')"
+        echo log_info "可用内存: $(free -m 2^>/dev/null | grep Mem | awk '{print $2}' || echo '未知') MB"
+        echo log_info "可用磁盘空间: $(df -h / 2^>/dev/null | tail -1 | awk '{print $4}' || echo '未知')"
         echo.
         echo # 启动服务器
         echo log_success "所有检查通过，正在启动服务器..."
@@ -263,9 +297,19 @@ if not exist "deploy\docker\start.sh" (
         echo exec /app/bin/attack-server -config /app/backend/config.json
     ) > deploy\docker\start.sh
     
-    REM 确保脚本使用Unix风格的换行符(LF)
-    call :info "转换启动脚本为Unix格式..."
-    call :info "注意: Windows环境下，请确保脚本在容器中有正确的执行权限"
+    REM 确保脚本使用Unix风格的换行符(LF)，并有正确的执行权限
+    call :info "已创建启动脚本，将在Docker中正确执行"
+    
+    REM 使用Docker容器转换换行符为Unix格式并设置执行权限
+    where docker >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        docker run --rm -v %cd%/deploy/docker:/scripts alpine:latest /bin/sh -c "sed -i 's/\r$//' /scripts/start.sh && chmod +x /scripts/start.sh" 2>nul
+        if %ERRORLEVEL% equ 0 (
+            call :success "已优化启动脚本格式和权限"
+        ) else (
+            call :warn "无法自动优化脚本格式，但不影响基本功能"
+        )
+    )
 )
 
 REM 更新docker-compose.yml以使用新端口

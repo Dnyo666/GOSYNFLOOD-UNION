@@ -290,9 +290,9 @@ fi
 # 记录环境信息
 log_info "系统检查完成"
 log_info "环境信息:"
-log_info "Alpine版本: $(cat /etc/alpine-release)"
-log_info "可用内存: $(free -m | grep Mem | awk '{print $2}') MB"
-log_info "可用磁盘空间: $(df -h / | tail -1 | awk '{print $4}')"
+log_info "Alpine版本: $(cat /etc/alpine-release 2>/dev/null || echo '未知')"
+log_info "可用内存: $(free -m 2>/dev/null | grep Mem | awk '{print $2}' 2>/dev/null || echo '未知') MB"
+log_info "可用磁盘空间: $(df -h / 2>/dev/null | tail -1 | awk '{print $4}' 2>/dev/null || echo '未知')"
 
 # 启动服务器前执行最后的文件检查
 if [ ! -f "/app/backend/static/index.html" ]; then

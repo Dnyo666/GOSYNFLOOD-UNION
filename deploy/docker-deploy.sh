@@ -125,7 +125,8 @@ mkdir -p deploy/docker
 info "检查启动脚本..."
 if [ ! -f "deploy/docker/start.sh" ]; then
     info "创建启动脚本文件..."
-    cat > deploy/docker/start.sh << 'EOF'
+    mkdir -p deploy/docker
+    cat > deploy/docker/start.sh << 'EOFMARKER'
 #!/bin/sh
 
 # 函数定义
@@ -257,15 +258,15 @@ fi
 # 记录环境信息
 log_info "系统检查完成"
 log_info "环境信息:"
-log_info "Alpine版本: $(cat /etc/alpine-release)"
-log_info "可用内存: $(free -m | grep Mem | awk '{print $2}') MB"
-log_info "可用磁盘空间: $(df -h / | tail -1 | awk '{print $4}')"
+log_info "Alpine版本: $(cat /etc/alpine-release 2>/dev/null || echo '未知')"
+log_info "可用内存: $(free -m 2>/dev/null | grep Mem | awk '{print $2}' 2>/dev/null || echo '未知') MB"
+log_info "可用磁盘空间: $(df -h / 2>/dev/null | tail -1 | awk '{print $4}' 2>/dev/null || echo '未知')"
 
 # 启动服务器
 log_success "所有检查通过，正在启动服务器..."
 cd /app
 exec /app/bin/attack-server -config /app/backend/config.json
-EOF
+EOFMARKER
     chmod +x deploy/docker/start.sh
     info "启动脚本已创建并设置执行权限"
 fi
