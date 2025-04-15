@@ -9,10 +9,37 @@ const api = axios.create({
   }
 })
 
+// 请求拦截器，添加认证令牌
+api.interceptors.request.use(config => {
+  // 从localStorage获取保存的令牌
+  const adminToken = localStorage.getItem('adminToken')
+  
+  // 如果有令牌，添加到请求头
+  if (adminToken) {
+    config.headers['X-Admin-Token'] = adminToken
+  }
+  
+  return config
+}, error => {
+  return Promise.reject(error)
+})
+
 // 响应拦截器处理错误
 api.interceptors.response.use(
   response => response.data,
   error => {
+    // 特殊处理认证错误
+    if (error.response && error.response.status === 401) {
+      // 清除无效的令牌
+      localStorage.removeItem('adminToken')
+      
+      // 如果不在登录页面，重定向到登录页
+      if (window.location.pathname !== '/login.html') {
+        window.location.href = '/login.html'
+        return Promise.reject(new Error('认证已过期，请重新登录'))
+      }
+    }
+    
     console.error('API请求错误:', error)
     return Promise.reject(error)
   }
@@ -51,6 +78,27 @@ export const attackApi = {
   // 停止攻击任务
   stopAttack(id) {
     return api.post(`/attacks/${id}/stop`)
+  }
+}
+
+// 用户认证相关API
+export const authApi = {
+  // 登录
+  login(adminToken) {
+    return api.post('/login', { adminToken })
+  },
+  
+  // 检查当前认证状态
+  checkAuth() {
+    return api.get('/servers')
+      .then(() => true)
+      .catch(() => false)
+  },
+  
+  // 登出
+  logout() {
+    localStorage.removeItem('adminToken')
+    return Promise.resolve(true)
   }
 }
 
@@ -97,5 +145,6 @@ export const wsService = {
 export default {
   server: serverApi,
   attack: attackApi,
+  auth: authApi,
   ws: wsService
 } 

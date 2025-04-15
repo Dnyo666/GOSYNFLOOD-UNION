@@ -533,6 +533,50 @@ func getCommands(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(command)
 }
 
+// 处理登录请求
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	// 只允许POST方法
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 解析登录请求
+	var loginRequest struct {
+		AdminToken string `json:"adminToken"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&loginRequest); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "无效的请求格式",
+		})
+		return
+	}
+
+	// 验证管理员令牌
+	valid, statusCode := middleware.VerifyAdminToken(loginRequest.AdminToken)
+	if !valid {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "登录失败：令牌无效",
+		})
+		return
+	}
+
+	// 设置认证Cookie
+	middleware.SetAuthCookie(w, loginRequest.AdminToken)
+
+	// 返回成功响应
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "登录成功",
+	})
+}
+
 func main() {
 	// 添加命令行参数支持
 	configPath := flag.String("config", "config.json", "配置文件路径")
@@ -549,6 +593,9 @@ func main() {
 	// 设置路由
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api").Subrouter()
+
+	// 登录API路由
+	api.HandleFunc("/login", handleLogin).Methods("POST", "OPTIONS")
 
 	// 受保护的API路由 - 需要管理员权限
 	api.HandleFunc("/servers", middleware.AdminAuthMiddleware(addServer)).Methods("POST")
@@ -567,8 +614,13 @@ func main() {
 	// WebSocket连接
 	r.HandleFunc("/ws", handleWebSocket)
 
-	// 静态文件服务
-	r.PathPrefix("/").Handler(http.FileServer(http.Dir(config.AppConfig.StaticDir)))
+	// 创建静态文件服务器
+	fileServer := http.FileServer(http.Dir(config.AppConfig.StaticDir))
+
+	// 应用前端身份验证中间件
+	// 注意: 登录页面路径是"/login.html"
+	frontendHandler := middleware.FrontendAuthMiddleware("/login.html")(fileServer)
+	r.PathPrefix("/").Handler(frontendHandler)
 
 	// 设置CORS
 	c := cors.New(cors.Options{
