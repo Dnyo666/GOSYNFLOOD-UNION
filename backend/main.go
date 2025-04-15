@@ -616,6 +616,9 @@ func main() {
 
 	// 创建静态文件服务器
 	fileServer := http.FileServer(http.Dir(config.AppConfig.StaticDir))
+	
+	// 显式处理/static/路径，直接使用静态文件服务器而不经过认证中间件
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
 
 	// 应用前端身份验证中间件
 	// 使用根路径和静态路径的登录页面

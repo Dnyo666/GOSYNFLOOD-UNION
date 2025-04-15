@@ -86,6 +86,9 @@ if [ -f "/app/backend/config.json" ]; then
   STATIC_DIR=$(grep -o '"staticDir"[^,}]*' /app/backend/config.json | cut -d '"' -f 4)
   log_info "配置的静态文件目录: $STATIC_DIR"
   
+  # 确保静态文件目录存在，无论是相对路径还是绝对路径
+  mkdir -p "/app/backend/static"
+  
   # 检查是否为相对路径，并创建软链接确保正确映射
   if [ "${STATIC_DIR:0:1}" = "." ]; then
     # 相对路径处理
@@ -100,11 +103,18 @@ if [ -f "/app/backend/config.json" ]; then
       ln -sf /app/backend/static "$REAL_STATIC_DIR"
       log_info "创建软链接: /app/backend/static -> $REAL_STATIC_DIR"
     fi
+    
+    # 修改config.json以使用绝对路径
+    log_info "正在更新配置文件，将相对静态文件路径改为绝对路径..."
+    sed -i "s|\"staticDir\": \"${STATIC_DIR}\"|\"staticDir\": \"/app/backend/static\"|g" /app/backend/config.json
+    log_info "配置文件已更新，静态目录现在使用绝对路径: /app/backend/static"
   fi
 else
   log_warn "无法解析配置文件中的staticDir，使用默认值"
+  mkdir -p "/app/backend/static"
 fi
 
+# 检查认证中间件
 if [ ! -f "/app/backend/middleware/auth.go" ]; then
   log_error "错误: 找不到认证中间件: /app/backend/middleware/auth.go"
   log_error "将尝试创建默认认证中间件"
@@ -134,6 +144,249 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 EOF
   log_info "已创建默认认证中间件"
+fi
+
+# 确保登录页面存在
+if [ ! -f "/app/backend/static/login.html" ]; then
+  log_warn "警告: 找不到登录页面文件: /app/backend/static/login.html"
+  log_info "创建基本登录页面..."
+  
+  mkdir -p /app/backend/static
+  cat > /app/backend/static/login.html << EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GOSYNFLOOD管理平台 - 登录</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f7f9;
+      color: #333;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .login-container {
+      background-color: #fff;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      padding: 40px;
+      width: 360px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .header h1 {
+      color: #2c3e50;
+      margin: 0;
+      font-size: 28px;
+      font-weight: 500;
+    }
+    .header p {
+      color: #7f8c8d;
+      margin-top: 10px;
+      font-size: 16px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #34495e;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #2980b9;
+    }
+    .alert {
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .alert-danger {
+      background-color: #fee;
+      color: #e74c3c;
+      border: 1px solid #f5c6cb;
+    }
+    .alert-success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="header">
+      <h1>GOSYNFLOOD管理平台</h1>
+      <p>请输入管理员令牌进行登录</p>
+    </div>
+    
+    <div id="alert-error" class="alert alert-danger"></div>
+    <div id="alert-success" class="alert alert-success"></div>
+    
+    <form id="login-form">
+      <div class="form-group">
+        <label for="admin-token">管理员令牌</label>
+        <input type="password" id="admin-token" name="adminToken" placeholder="请输入管理员令牌" required>
+      </div>
+      <button type="submit">登录</button>
+    </form>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const loginForm = document.getElementById('login-form');
+      const errorAlert = document.getElementById('alert-error');
+      const successAlert = document.getElementById('alert-success');
+      
+      // 检查是否已有保存的令牌
+      const savedToken = localStorage.getItem('adminToken');
+      if (savedToken) {
+        // 尝试自动验证
+        verifyToken(savedToken);
+      }
+      
+      loginForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const adminToken = document.getElementById('admin-token').value.trim();
+        if (!adminToken) {
+          showError('请输入管理员令牌');
+          return;
+        }
+        
+        // 发送登录请求
+        login(adminToken);
+      });
+      
+      // 登录函数
+      function login(token) {
+        fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ adminToken: token }),
+          credentials: 'same-origin'
+        })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => {
+              throw new Error(data.error || '登录失败');
+            });
+          }
+          return response.json();
+        })
+        .then(data => {
+          // 登录成功
+          localStorage.setItem('adminToken', token);
+          showSuccess('登录成功，正在跳转...');
+          
+          // 跳转到首页
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 1000);
+        })
+        .catch(error => {
+          showError(error.message);
+        });
+      }
+      
+      // 验证已保存的令牌
+      function verifyToken(token) {
+        fetch('/api/servers', {
+          headers: {
+            'X-Admin-Token': token
+          },
+          credentials: 'same-origin'
+        })
+        .then(response => {
+          if (response.ok) {
+            // 令牌有效，跳转到首页
+            window.location.href = '/';
+          } else {
+            // 令牌无效，清除
+            localStorage.removeItem('adminToken');
+          }
+        })
+        .catch(() => {
+          // 发生错误，清除令牌
+          localStorage.removeItem('adminToken');
+        });
+      }
+      
+      // 显示错误信息
+      function showError(message) {
+        errorAlert.textContent = message;
+        errorAlert.style.display = 'block';
+        successAlert.style.display = 'none';
+      }
+      
+      // 显示成功信息
+      function showSuccess(message) {
+        successAlert.textContent = message;
+        successAlert.style.display = 'block';
+        errorAlert.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
+EOF
+  log_info "登录页面已创建"
+fi
+
+# 确保登录根页面存在
+if [ ! -f "/app/backend/static/login-root.html" ]; then
+  log_warn "警告: 找不到登录根页面文件: /app/backend/static/login-root.html"
+  log_info "创建登录根页面..."
+  
+  mkdir -p /app/backend/static
+  cat > /app/backend/static/login-root.html << EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0; url=/static/login.html">
+  <title>重定向到登录页</title>
+</head>
+<body>
+  <p>正在重定向到登录页...</p>
+  <script>
+    window.location.href = "/static/login.html";
+  </script>
+</body>
+</html>
+EOF
+  log_info "登录根页面已创建"
 fi
 
 # 前端静态文件检查
@@ -301,7 +554,78 @@ if [ ! -f "/app/backend/static/index.html" ]; then
   echo '<html><body><h1>GOSYNFLOOD管理平台</h1><p>紧急备用页面</p></body></html>' > /app/backend/static/index.html
 fi
 
+# 在文件系统上查找并检测login.html文件的实际位置
+find_login_html=$(find /app -name "login.html" -type f 2>/dev/null)
+if [ ! -z "$find_login_html" ]; then
+  log_info "在系统中找到login.html文件: $find_login_html"
+  
+  # 如果找到的文件不在/app/backend/static目录下，复制过去
+  if [[ "$find_login_html" != "/app/backend/static/login.html" ]]; then
+    log_info "复制login.html到正确位置: /app/backend/static/login.html"
+    cp "$find_login_html" "/app/backend/static/login.html"
+  fi
+fi
+
+# 创建测试页面验证静态文件路径
+log_info "创建静态文件路径测试页面..."
+mkdir -p /app/backend/static
+cat > /app/backend/static/path-test.html << EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>静态文件路径测试</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .test-box { 
+      border: 1px solid #ddd; 
+      padding: 15px; 
+      margin-bottom: 20px; 
+      border-radius: 4px;
+      background-color: #f9f9f9;
+    }
+    h1 { color: #333; }
+    .success { color: green; }
+    .error { color: red; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>静态文件路径测试页面</h1>
+  
+  <div class="test-box">
+    <h2>当前页面信息</h2>
+    <p>当前文件: <code>/app/backend/static/path-test.html</code></p>
+    <p>访问URL: <code>/static/path-test.html</code></p>
+    <p><span class="success">✓ 如果您能看到此页面，说明静态文件路由已正确配置</span></p>
+  </div>
+  
+  <div class="test-box">
+    <h2>静态资源链接测试</h2>
+    <p>尝试访问以下链接：</p>
+    <ul>
+      <li><a href="/static/login.html">/static/login.html</a> - 登录页面</li>
+      <li><a href="/login-root.html">/login-root.html</a> - 登录根页面</li>
+      <li><a href="/">/</a> - 根路径 (前端首页)</li>
+    </ul>
+  </div>
+  
+  <div class="test-box">
+    <h2>服务器配置信息</h2>
+    <pre>
+静态文件目录配置: ${STATIC_DIR:-"./static"}
+静态文件实际路径: /app/backend/static
+容器内实际文件列表: 
+$(find /app/backend/static -type f | sort)
+    </pre>
+  </div>
+</body>
+</html>
+EOF
+log_info "静态文件路径测试页面已创建: /app/backend/static/path-test.html"
+log_info "您可以通过访问 http://localhost:${PORT:-31457}/static/path-test.html 来测试静态文件路径"
+
 # 启动服务器
 log_success "所有检查通过，正在启动服务器..."
-cd /app/backend
+cd /app
 exec /app/bin/attack-server -config /app/backend/config.json 

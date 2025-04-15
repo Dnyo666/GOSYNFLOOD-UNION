@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"path/filepath"
+	"os"
 )
 
 // 配置保存在内存中的安全令牌
@@ -81,10 +83,12 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 允许直接访问登录页面和静态资源
+			// 注意：/static/路径已由main.go中的专用处理器处理，不会经过这个中间件
 			if r.URL.Path == loginPath || 
 			   r.URL.Path == "/login-root.html" ||
-			   strings.HasPrefix(r.URL.Path, "/static/") || 
+			   r.URL.Path == "/login.html" ||
 			   strings.HasPrefix(r.URL.Path, "/api/login") ||
+			   strings.HasPrefix(r.URL.Path, "/assets/") ||
 			   strings.HasPrefix(r.URL.Path, "/favicon.ico") {
 				next.ServeHTTP(w, r)
 				return
@@ -105,6 +109,21 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 				return
 			}
 
+			// 检查是否是前端路由请求 (非静态资源但请求HTML)
+			if !strings.Contains(r.URL.Path, ".") && r.Method == "GET" {
+				// Vue的history模式需要所有未找到的路由都返回index.html
+				indexPath := filepath.Join(filepath.Dir(loginPath), "index.html")
+				if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+					// 如果index.html不存在，尝试在static目录下查找
+					alternativePath := "./static/index.html"
+					if _, err := os.Stat(alternativePath); err == nil {
+						indexPath = alternativePath
+					}
+				}
+				http.ServeFile(w, r, indexPath)
+				return
+			}
+			
 			// 已认证，继续处理请求
 			next.ServeHTTP(w, r)
 		})

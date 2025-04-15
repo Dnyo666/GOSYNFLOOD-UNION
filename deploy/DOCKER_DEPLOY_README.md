@@ -76,6 +76,64 @@ ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
 
 **注意**: 构建和启动必须分为两个步骤，或使用`--build`参数，否则可能会尝试拉取不存在的远程镜像。
 
+## 前端路由与登录说明
+
+由于本项目使用Vue的history模式构建前端路由，部署时需要注意以下几点：
+
+1. **登录流程**:
+   - 当用户首次访问系统或未登录时，会被重定向到`/login-root.html`
+   - `login-root.html`会自动重定向到`/static/login.html`，这是实际的登录页面
+   - 用户输入管理员令牌后，会被重定向到主页
+
+2. **路由处理**:
+   - 静态资源位于`/app/backend/static`目录，通过`/static/`路径访问
+   - 前端路由(如`/attack`, `/servers`等)在服务器端全部重定向到`index.html`，由Vue Router处理
+   - 在部署脚本中已自动调整配置文件，确保静态文件路径正确
+
+3. **静态文件检查**:
+   - 部署脚本会检查登录页面和相关文件是否存在，缺失时会自动创建基本版本
+   - 如果发现前端页面无法访问，可尝试重新构建Docker镜像，或手动复制静态文件
+
+4. **认证令牌**:
+   - 登录成功后，令牌保存在浏览器的localStorage中
+   - API请求自动附加令牌在`X-Admin-Token`请求头中
+   - 管理员令牌在Docker容器中通过环境变量`ADMIN_TOKEN`设置
+
+5. **关于静态文件路径配置**:
+   - 静态文件通过`/static/`URL前缀访问，但物理路径是`/app/backend/static`
+   - 系统会自动处理路径映射，确保静态资源能够正确加载
+   - 如果遇到登录页面404错误，可以访问测试页面 `/static/path-test.html` 验证配置
+
+### 静态文件路径问题排查
+
+如果遇到登录页面404错误，可能是由于以下原因：
+
+1. **静态文件服务配置问题**:
+   ```
+   访问/static/login.html时出现404错误
+   ```
+   
+   解决方案：
+   - 确认`/app/backend/static`目录中存在`login.html`文件
+   - 检查服务器日志，查看实际请求路径
+   - 可以尝试手动将登录页面文件复制到正确位置：
+   ```bash
+   docker exec -it gosynflood-manager cp /app/backend/static/login.html /app/backend/static/login.html
+   ```
+
+2. **路径重定向问题**:
+   如果login-root.html显示但无法重定向到登录页面，可以尝试：
+   ```bash
+   # 进入容器
+   docker exec -it gosynflood-manager sh
+   
+   # 检查静态文件目录
+   ls -la /app/backend/static
+   
+   # 确认配置文件中的静态目录设置
+   cat /app/backend/config.json | grep staticDir
+   ```
+
 ## 常见问题解决
 
 1. **找不到attack-manager镜像错误**:
