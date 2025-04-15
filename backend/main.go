@@ -618,8 +618,8 @@ func main() {
 	fileServer := http.FileServer(http.Dir(config.AppConfig.StaticDir))
 
 	// 应用前端身份验证中间件
-	// 注意: 登录页面路径是"/login.html"
-	frontendHandler := middleware.FrontendAuthMiddleware("/login.html")(fileServer)
+	// 使用根路径和静态路径的登录页面
+	frontendHandler := middleware.FrontendAuthMiddleware("/login-root.html")(fileServer)
 	r.PathPrefix("/").Handler(frontendHandler)
 
 	// 设置CORS

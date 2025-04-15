@@ -82,6 +82,7 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 允许直接访问登录页面和静态资源
 			if r.URL.Path == loginPath || 
+			   r.URL.Path == "/login-root.html" ||
 			   strings.HasPrefix(r.URL.Path, "/static/") || 
 			   strings.HasPrefix(r.URL.Path, "/api/login") ||
 			   strings.HasPrefix(r.URL.Path, "/favicon.ico") {

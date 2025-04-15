@@ -34,8 +34,9 @@ api.interceptors.response.use(
       localStorage.removeItem('adminToken')
       
       // 如果不在登录页面，重定向到登录页
-      if (window.location.pathname !== '/login.html') {
-        window.location.href = '/login.html'
+      if (window.location.pathname !== '/static/login.html' && 
+          window.location.pathname !== '/login-root.html') {
+        window.location.href = '/login-root.html'
         return Promise.reject(new Error('认证已过期，请重新登录'))
       }
     }
