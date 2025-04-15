@@ -111,6 +111,9 @@ RUN if [ -z "$(ls -A /app/backend/static 2>/dev/null)" ]; then \
     echo "静态文件已复制，文件数: $(find /app/backend/static -type f | wc -l)"; \
     fi
 
+# 确保login-root.html总是存在
+RUN echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0; url=/static/login.html"><title>重定向到登录页</title></head><body><p>正在重定向到登录页...</p><script>window.location.href = "/static/login.html";</script></body></html>' > /app/backend/static/login-root.html
+
 # 复制配置文件
 COPY backend/config.json /app/backend/
 

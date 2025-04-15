@@ -453,4 +453,40 @@ echo 重启服务: docker-compose restart
 echo 重建镜像: docker-compose build --no-cache ^&^& docker-compose up -d
 echo.
 
+REM 验证令牌设置
+call :info "验证认证令牌设置..."
+timeout /t 3 /nobreak >nul
+
+REM 检查令牌是否正确设置
+for /f "tokens=*" %%a in ('docker exec gosynflood-manager grep -o "AdminToken = \"[^\"]*\"" /app/backend/middleware/auth.go 2^>nul') do (
+    set "TOKEN_VALUE=%%a"
+)
+
+echo %TOKEN_VALUE% | findstr /C:"%ADMIN_TOKEN%" >nul
+if %ERRORLEVEL% equ 0 (
+    call :success "认证令牌已正确设置: %TOKEN_VALUE%"
+) else (
+    call :warn "认证令牌可能未正确设置。实际值: %TOKEN_VALUE%"
+    call :warn "如果登录失败，请使用以下命令修复令牌:"
+    echo docker exec gosynflood-manager powershell -Command "$content = 'package middleware
+
+import (
+    \"encoding/json\"
+    \"io\"
+    \"net/http\"
+    \"strings\"
+    \"time\"
+    \"path/filepath\"
+    \"os\"
+)
+
+// 配置保存在内存中的安全令牌
+var (
+    AdminToken = \"%ADMIN_TOKEN%\" // 生产环境应使用环境变量
+)'; Set-Content -Path '/tmp/header.txt' -Value $content; Get-Content '/app/backend/middleware/auth.go' | Select-String -Pattern 'func AdminAuthMiddleware' -Context 0,1000 | ForEach-Object { $_.Context.PostContext } | Set-Content -Path '/tmp/body.txt'; Get-Content '/tmp/header.txt','/tmp/body.txt' | Set-Content -Path '/app/backend/middleware/auth.go'"
+    echo docker restart gosynflood-manager
+)
+
+echo.
+
 exit /b 0 

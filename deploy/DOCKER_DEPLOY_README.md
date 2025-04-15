@@ -172,61 +172,186 @@ ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
    docker-compose build --no-cache
    ```
 
-3. **前端构建产物路径错误**:
+3. **静态文件路径404错误（/login-root.html或/static/login.html不可访问）**:
    ```
-   COPY --from=frontend-builder /app/dist/ /app/backend/static/: not found
-   ```
-   
-   解决方案: 
-   ```bash
-   # 确保目标目录存在
-   mkdir -p backend/static
-   
-   # 查看Vue配置中的输出目录
-   cat frontend/vue.config.js | grep outputDir
-   
-   # 编辑Dockerfile，确保路径与Vue配置一致:
-   # COPY --from=frontend-builder /app/backend/static/ /app/backend/static/
-   ```
-
-4. **构建超时或依赖下载慢**:
-   ```
-   ERROR: failed to solve: process "/bin/sh -c npm install --no-fund --no-audit --production=false" did not complete successfully
+   404 page not found - 当尝试访问/login-root.html或/static/login.html时
    ```
    
    解决方案:
    ```bash
-   # 清理Docker构建缓存
-   docker builder prune -f
+   # 进入容器
+   docker exec -it gosynflood-manager sh
    
-   # 使用--no-cache选项强制重新构建
-   docker-compose build --no-cache
+   # 检查静态文件目录结构
+   ls -la /app/backend/static
    
-   # 如果仍然失败，考虑设置npm镜像源
-   npm config set registry https://registry.npmmirror.com/
+   # 确保login.html存在
+   if [ ! -f "/app/backend/static/login.html" ]; then
+     echo "找不到login.html文件，从系统其他位置搜索..."
+     find_login=$(find /app -name "login.html" -type f)
+     if [ ! -z "$find_login" ]; then
+       echo "找到login.html: $find_login"
+       cp "$find_login" /app/backend/static/login.html
+     else
+       echo "无法找到login.html, 创建默认版本..."
+       # 创建默认的login.html文件
+       cat > /app/backend/static/login.html << 'EOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>登录</title>
+</head>
+<body>
+  <h1>登录</h1>
+  <form id="login-form">
+    <input type="password" id="admin-token" placeholder="管理员令牌">
+    <button type="submit">登录</button>
+  </form>
+  <script>
+    document.getElementById('login-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const token = document.getElementById('admin-token').value;
+      fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({adminToken: token})
+      })
+      .then(r => r.json())
+      .then(data => {
+        if(data.success) {
+          localStorage.setItem('adminToken', token);
+          window.location.href = '/';
+        } else {
+          alert('登录失败');
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+EOF
+     fi
+   fi
    
-   # 或者在Dockerfile中添加:
-   # RUN npm config set registry https://registry.npmmirror.com/
+   # 确保login-root.html正确重定向
+   echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0; url=/static/login.html"><title>重定向到登录页</title></head><body><p>正在重定向到登录页...</p><script>window.location.href = "/static/login.html";</script></body></html>' > /app/backend/static/login-root.html
+   
+   # 退出容器
+   exit
+   
+   # 重启容器
+   docker restart gosynflood-manager
    ```
+   
+   **静态文件路径配置说明**:
+   - 系统使用多级路由处理静态文件：
+     - `/static/*` - 直接由静态文件服务器处理，无需认证
+     - `/login-root.html` - 特殊处理，直接提供`/app/backend/static/login.html`文件
+     - 其他路径 - 由FrontendAuthMiddleware处理，需要认证
+     
+   - 登录流程：
+     1. 未认证用户访问任何受保护页面会被重定向到`/login-root.html`
+     2. `/login-root.html`会再次重定向到`/static/login.html`
+     3. 用户在登录页输入令牌验证通过后，会被重定向到原始请求页面
+     
+   - 如果遇到404错误，可通过访问`/static/path-test.html`测试页面来验证静态文件路径配置
 
-## 其他Docker管理命令
+4. **认证令牌无效问题(登录失败：令牌无效)**:
+   ```
+   {"error":"登录失败：令牌无效"}
+   ```
+   
+   解决方案:
+   ```bash
+   # 检查容器中auth.go文件的令牌配置
+   docker exec gosynflood-manager cat /app/backend/middleware/auth.go | head -20
+   
+   # 如果发现存在重复的package定义或者AdminToken定义，这表示文件内容出现了错误
+   # 使用以下命令完全重写auth.go文件:
+   
+   docker exec gosynflood-manager sh -c "cat > /app/backend/middleware/auth.go << 'EOF'
+package middleware
 
-```bash
-# 查看容器日志
-docker logs gosynflood-manager
+import (
+	\"encoding/json\"
+	\"io\"
+	\"net/http\"
+	\"strings\"
+	\"time\"
+	\"path/filepath\"
+	\"os\"
+)
 
-# 停止容器
-docker-compose down
+// 配置保存在内存中的安全令牌
+var (
+	AdminToken = \"您的令牌值\" // 替换为您的实际令牌
+)
 
-# 重启容器
-docker-compose restart
+// AdminAuthMiddleware 验证需要管理员权限的请求
+func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := \"\"
+		authHeader := r.Header.Get(\"X-Admin-Token\")
+		if authHeader != \"\" {
+			token = authHeader
+		}
+		
+		if token == \"\" && (r.Method == \"POST\" || r.Method == \"PUT\") {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err == nil {
+				r.Body.Close()
+				r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+				var requestData map[string]interface{}
+				if err := json.Unmarshal(bodyBytes, &requestData); err == nil {
+					if adminToken, ok := requestData[\"adminToken\"].(string); ok && adminToken != \"\" {
+						token = adminToken
+					}
+				}
+			}
+		}
+		
+		if token == \"\" {
+			if paramToken := r.URL.Query().Get(\"adminToken\"); paramToken != \"\" {
+				token = paramToken
+			}
+		}
+		
+		if token == \"\" {
+			if cookie, err := r.Cookie(\"admin_token\"); err == nil && cookie.Value != \"\" {
+				token = cookie.Value
+			}
+		}
+		
+		if token == \"\" || token != AdminToken {
+			w.Header().Set(\"Content-Type\", \"application/json\")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				\"error\": \"需要有效的管理员令牌\",
+			})
+			return
+		}
+		
+		next(w, r)
+	}
+}
+EOF"
+   
+   # 这只是auth.go文件的开头部分，完整版本请参考源代码
+   # 重启容器生效
+   docker restart gosynflood-manager
+   ```
+   
+   **错误原因说明**：
+   此错误通常是由于容器中的auth.go文件内容被错误修改，特别是在以下情况发生：
+   - 文件中包含重复的package声明
+   - AdminToken变量定义部分出现格式错误或被重复定义
+   - 文件中包含了原始Go代码的文本字符串表示，而不是有效的Go代码
+   
+   **预防措施**：
+   - 使用最新版本的deploy/docker/start.sh，它包含了改进的令牌更新方法
+   - 避免直接编辑容器内部的文件
+   - 在修改令牌后，始终检查auth.go文件的内容验证是否正确
 
-# 更新管理员令牌
-ADMIN_TOKEN="new-token" docker-compose up -d
-```
-
-## 安全提示
-
-- 请务必修改默认的管理员令牌
-- 考虑设置防火墙限制对管理平台的访问
-- 定期备份`gosynflood_attack_data`数据卷中的数据 
+4. **前端构建产物路径错误**:
+   ```

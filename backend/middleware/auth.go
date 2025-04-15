@@ -20,10 +20,9 @@ var (
 func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 提取和验证管理员令牌
-		// 从请求体、请求头或URL参数中获取
 		token := ""
 
-		// 检查请求头 - 标准方式
+		// 检查请求头
 		authHeader := r.Header.Get("X-Admin-Token")
 		if authHeader != "" {
 			token = authHeader
@@ -31,15 +30,11 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// 如果请求头中没有令牌，尝试从请求体中获取
 		if token == "" && (r.Method == "POST" || r.Method == "PUT") {
-			// 保存请求体以便后续读取
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err == nil {
 				r.Body.Close()
-				
-				// 重新创建可读取的请求体
 				r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 				
-				// 尝试解析JSON
 				var requestData map[string]interface{}
 				if err := json.Unmarshal(bodyBytes, &requestData); err == nil {
 					if adminToken, ok := requestData["adminToken"].(string); ok && adminToken != "" {
@@ -49,7 +44,7 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// 检查URL参数中是否有令牌（用于某些GET请求）
+		// 检查URL参数中是否有令牌
 		if token == "" {
 			if paramToken := r.URL.Query().Get("adminToken"); paramToken != "" {
 				token = paramToken
@@ -83,13 +78,20 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 允许直接访问登录页面和静态资源
-			// 注意：/static/路径已由main.go中的专用处理器处理，不会经过这个中间件
 			if r.URL.Path == loginPath || 
 			   r.URL.Path == "/login-root.html" ||
 			   r.URL.Path == "/login.html" ||
 			   strings.HasPrefix(r.URL.Path, "/api/login") ||
 			   strings.HasPrefix(r.URL.Path, "/assets/") ||
 			   strings.HasPrefix(r.URL.Path, "/favicon.ico") {
+				
+				// 对于/login-root.html，直接提供login.html文件
+				if r.URL.Path == "/login-root.html" {
+					http.ServeFile(w, r, "/app/backend/static/login.html")
+					return
+				}
+				
+				// 其他不需要验证的路径直接放行
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -109,22 +111,28 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// 检查是否是前端路由请求 (非静态资源但请求HTML)
+			// 检查是否是前端路由请求
 			if !strings.Contains(r.URL.Path, ".") && r.Method == "GET" {
-				// Vue的history模式需要所有未找到的路由都返回index.html
-				indexPath := filepath.Join(filepath.Dir(loginPath), "index.html")
+				indexPath := "/app/backend/static/index.html"
 				if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-					// 如果index.html不存在，尝试在static目录下查找
-					alternativePath := "./static/index.html"
-					if _, err := os.Stat(alternativePath); err == nil {
-						indexPath = alternativePath
+					// 尝试查找备用路径
+					alternativePaths := []string{
+						"./static/index.html",
+						"/app/frontend/dist/index.html",
+					}
+					
+					for _, path := range alternativePaths {
+						if _, err := os.Stat(path); err == nil {
+							indexPath = path
+							break
+						}
 					}
 				}
+				
 				http.ServeFile(w, r, indexPath)
 				return
 			}
 			
-			// 已认证，继续处理请求
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -143,20 +151,19 @@ func VerifyAdminToken(token string) (bool, int) {
 
 // SetAuthCookie 设置认证Cookie
 func SetAuthCookie(w http.ResponseWriter, token string) {
-	// 设置包含令牌的Cookie，有效期24小时
 	cookie := &http.Cookie{
 		Name:     "admin_token",
 		Value:    token,
 		Path:     "/",
-		HttpOnly: true,            // 防止JavaScript访问
-		Secure:   false,           // 在生产环境中设置为true以要求HTTPS
-		SameSite: http.SameSiteStrictMode, // 防止CSRF攻击
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(24 * time.Hour),
 	}
 	http.SetCookie(w, cookie)
 }
 
-// ServerState 定义服务器状态结构，用于从appState中提取
+// ServerState 定义服务器状态结构
 type ServerState struct {
 	Servers map[string]Server
 }
@@ -179,15 +186,11 @@ func APIKeyMiddleware(appState interface{}, next http.HandlerFunc) http.HandlerF
 
 		// 如果查询参数中没有，尝试从请求体中获取
 		if (serverID == "" || apiKey == "") && (r.Method == "POST" || r.Method == "PUT") {
-			// 保存请求体以便后续读取
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err == nil {
 				r.Body.Close()
-				
-				// 重新创建可读取的请求体
 				r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 				
-				// 尝试解析JSON
 				var requestData map[string]interface{}
 				if err := json.Unmarshal(bodyBytes, &requestData); err == nil {
 					if sid, ok := requestData["serverId"].(string); ok {
@@ -206,18 +209,12 @@ func APIKeyMiddleware(appState interface{}, next http.HandlerFunc) http.HandlerF
 		// 实现API密钥验证逻辑
 		isValid := false
 		
-		// 检查服务器ID和API密钥是否为空
 		if serverID != "" && apiKey != "" {
-			// 从应用状态获取服务器列表
 			if state, ok := appState.(*ServerState); ok && state != nil {
-				// 检查服务器ID是否存在
 				if server, exists := state.Servers[serverID]; exists {
-					// 验证API密钥是否匹配
 					isValid = (server.APIKey == apiKey)
 				}
 			} else {
-				// 如果appState没有正确的类型或为nil，在开发/测试环境中允许请求通过
-				// 注意：在生产环境中，应该总是验证API密钥
 				isValid = true
 			}
 		}
@@ -231,7 +228,6 @@ func APIKeyMiddleware(appState interface{}, next http.HandlerFunc) http.HandlerF
 			return
 		}
 
-		// 验证通过，继续处理请求
 		next(w, r)
 	}
 } 

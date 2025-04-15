@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -619,9 +620,13 @@ func main() {
 	
 	// 显式处理/static/路径，直接使用静态文件服务器而不经过认证中间件
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
+	
+	// 显式处理login-root.html路径
+	r.HandleFunc("/login-root.html", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(config.AppConfig.StaticDir, "login.html"))
+	})
 
 	// 应用前端身份验证中间件
-	// 使用根路径和静态路径的登录页面
 	frontendHandler := middleware.FrontendAuthMiddleware("/login-root.html")(fileServer)
 	r.PathPrefix("/").Handler(frontendHandler)
 

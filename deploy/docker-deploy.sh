@@ -391,4 +391,33 @@ echo "查看容器日志: docker logs gosynflood-manager"
 echo "停止服务: docker-compose down"
 echo "重启服务: docker-compose restart"
 echo "重建镜像: docker-compose build --no-cache && docker-compose up -d"
+
+# 验证令牌设置
+info "验证认证令牌设置..."
+sleep 3 # 等待容器完全启动
+TOKEN_VALUE=$(docker exec gosynflood-manager grep -o 'AdminToken = "[^"]*"' /app/backend/middleware/auth.go 2>/dev/null)
+if [[ "$TOKEN_VALUE" == *"$ADMIN_TOKEN"* ]]; then
+    success "认证令牌已正确设置: $TOKEN_VALUE"
+else
+    warn "认证令牌可能未正确设置。实际值: $TOKEN_VALUE"
+    warn "如果登录失败，请使用以下命令修复令牌:"
+    echo "docker exec gosynflood-manager sh -c \"echo 'package middleware
+
+import (
+    \\\"encoding/json\\\"
+    \\\"io\\\"
+    \\\"net/http\\\"
+    \\\"strings\\\"
+    \\\"time\\\"
+    \\\"path/filepath\\\"
+    \\\"os\\\"
+)
+
+// 配置保存在内存中的安全令牌
+var (
+    AdminToken = \\\"$ADMIN_TOKEN\\\" // 生产环境应使用环境变量
+)' > /tmp/header.txt && sed -n '/func AdminAuthMiddleware/,\\\$p' /app/backend/middleware/auth.go > /tmp/body.txt && cat /tmp/header.txt /tmp/body.txt > /app/backend/middleware/auth.go\""
+    echo "docker restart gosynflood-manager"
+fi
+
 echo "" 
