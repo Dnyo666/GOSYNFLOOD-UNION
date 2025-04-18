@@ -990,10 +990,31 @@ EOF
         cat > "$START_SCRIPT" << EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
+# 使用配置文件启动，也支持命令行参数覆盖
 ./attack-agent -id $AGENT_ID -key "$AGENT_KEY" -master "$MANAGER_URL" -tools "/usr/local/bin" "\$@"
+# 注意：配置文件位于 $INSTALL_DIR/config/agent-config.json
+# 如果您需要修改配置，可以编辑该文件
 EOF
         chmod +x "$START_SCRIPT"
         echo "启动脚本已创建: $START_SCRIPT"
+        
+        # 创建标准的代理配置文件
+        CONFIG_DIR="$INSTALL_DIR/config"
+        mkdir -p "$CONFIG_DIR"
+        AGENT_CONFIG_FILE="$CONFIG_DIR/agent-config.json"
+        echo "创建代理配置文件..."
+        cat > "$AGENT_CONFIG_FILE" << EOF
+{
+    "serverId": $AGENT_ID,
+    "apiKey": "$AGENT_KEY",
+    "masterUrl": "$MANAGER_URL",
+    "toolsPath": "/usr/local/bin",
+    "toolName": "gosynflood",
+    "checkInterval": 5,
+    "debug": false
+}
+EOF
+        echo "配置文件已创建: $AGENT_CONFIG_FILE"
     fi
 }
 

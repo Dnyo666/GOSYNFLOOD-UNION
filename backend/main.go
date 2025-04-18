@@ -538,6 +538,7 @@ func getCommands(w http.ResponseWriter, r *http.Request) {
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 只允许POST方法
 	if r.Method != "POST" {
+		log.Printf("登录请求使用了不允许的方法: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -548,6 +549,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&loginRequest); err != nil {
+		log.Printf("解析登录请求失败: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -556,9 +558,12 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("收到登录请求，令牌长度: %d", len(loginRequest.AdminToken))
+
 	// 验证管理员令牌
 	valid, statusCode := middleware.VerifyAdminToken(loginRequest.AdminToken)
 	if !valid {
+		log.Printf("登录失败: 无效的令牌，状态码: %d", statusCode)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -569,6 +574,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// 设置认证Cookie
 	middleware.SetAuthCookie(w, loginRequest.AdminToken)
+	log.Printf("登录成功: 已设置认证Cookie")
 
 	// 返回成功响应
 	w.Header().Set("Content-Type", "application/json")
@@ -595,8 +601,17 @@ func main() {
 	r := mux.NewRouter()
 	api := r.PathPrefix("/api").Subrouter()
 
-	// 登录API路由
+	// 登录API路由 - 确保正确处理OPTIONS请求和CORS
 	api.HandleFunc("/login", handleLogin).Methods("POST", "OPTIONS")
+	
+	// 添加CORS预检请求处理
+	api.Methods("OPTIONS").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.WriteHeader(http.StatusOK)
+	})
 
 	// 受保护的API路由 - 需要管理员权限
 	api.HandleFunc("/servers", middleware.AdminAuthMiddleware(addServer)).Methods("POST")
@@ -618,15 +633,28 @@ func main() {
 	// 创建静态文件服务器
 	fileServer := http.FileServer(http.Dir(config.AppConfig.StaticDir))
 	
-	// 显式处理/static/路径，直接使用静态文件服务器而不经过认证中间件
+	// 打印静态文件目录配置
+	log.Printf("静态文件目录: %s", config.AppConfig.StaticDir)
+	
+	// 1. 显式处理/static/路径，直接使用静态文件服务器而不经过认证中间件
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
 	
-	// 显式处理login-root.html路径
+	// 2. 显式处理登录相关路径
+	// 处理/login-root.html和/login.html路径
 	r.HandleFunc("/login-root.html", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("重定向到登录页: /login-root.html -> %s", filepath.Join(config.AppConfig.StaticDir, "login.html"))
+		http.ServeFile(w, r, filepath.Join(config.AppConfig.StaticDir, "login.html"))
+	})
+	r.HandleFunc("/login.html", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("访问登录页: /login.html -> %s", filepath.Join(config.AppConfig.StaticDir, "login.html"))
+		http.ServeFile(w, r, filepath.Join(config.AppConfig.StaticDir, "login.html"))
+	})
+	r.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("访问登录页: /login -> %s", filepath.Join(config.AppConfig.StaticDir, "login.html"))
 		http.ServeFile(w, r, filepath.Join(config.AppConfig.StaticDir, "login.html"))
 	})
 
-	// 应用前端身份验证中间件
+	// 3. 应用前端身份验证中间件
 	frontendHandler := middleware.FrontendAuthMiddleware("/login-root.html")(fileServer)
 	r.PathPrefix("/").Handler(frontendHandler)
 

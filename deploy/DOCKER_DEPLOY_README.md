@@ -134,6 +134,111 @@ ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
    cat /app/backend/config.json | grep staticDir
    ```
 
+## 登录认证问题排查
+
+在部署完成后，如果遇到登录页面无法访问或登录失败的问题，可以参考以下步骤进行排查：
+
+1. **检查静态文件路径问题**：
+   访问 `http://your-domain/static/path-test.html` 来测试静态文件访问是否正常。如果能正常打开测试页面，但无法访问登录页面，可能是登录页面文件不存在或路径配置错误。
+
+2. **直接访问登录页面**：
+   尝试访问 `http://your-domain/static/login.html` 而不是通过重定向的 `/login-root.html`。这可以排除重定向问题。
+
+3. **检查登录认证令牌**：
+   ```bash
+   # 检查当前设置的管理员令牌
+   docker exec -it gosynflood-manager grep "AdminToken" /app/backend/middleware/auth.go
+   
+   # 查看当前使用的令牌，确认与部署时指定的一致
+   docker logs gosynflood-manager | grep "管理员令牌已更新"
+   ```
+
+4. **使用正确的管理员令牌**：
+   确保使用部署脚本输出的管理员令牌进行登录。如果忘记了令牌，可以使用以下命令设置一个新的：
+   ```bash
+   # 停止容器
+   docker-compose down
+   
+   # 使用新令牌启动
+   ADMIN_TOKEN="new-token-here" docker-compose up -d
+   ```
+
+5. **修复登录页面问题**：
+   如果登录页面404，可以手动创建必要的登录文件：
+   ```bash
+   docker exec -it gosynflood-manager sh -c "cat > /app/backend/static/login.html << 'EOF'
+   <!DOCTYPE html>
+   <html>
+   <head>
+     <meta charset=\"UTF-8\">
+     <title>登录</title>
+     <style>
+       body { font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+       form { width: 300px; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+       input { width: 100%; padding: 10px; margin: 10px 0; }
+       button { width: 100%; padding: 10px; background: #4CAF50; color: white; border: none; }
+     </style>
+   </head>
+   <body>
+     <form id=\"login-form\">
+       <h2>管理员登录</h2>
+       <input type=\"password\" id=\"admin-token\" placeholder=\"管理员令牌\">
+       <button type=\"submit\">登录</button>
+     </form>
+     <script>
+       document.getElementById('login-form').addEventListener('submit', function(e) {
+         e.preventDefault();
+         const token = document.getElementById('admin-token').value;
+         fetch('/api/login', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ adminToken: token })
+         })
+         .then(r => r.json())
+         .then(data => {
+           localStorage.setItem('adminToken', token);
+           window.location.href = '/';
+         })
+         .catch(err => alert('登录失败'));
+       });
+     </script>
+   </body>
+   </html>
+   EOF"
+   
+   # 创建login-root.html
+   docker exec -it gosynflood-manager sh -c "cat > /app/backend/static/login-root.html << 'EOF'
+   <!DOCTYPE html>
+   <html>
+   <head>
+     <meta charset=\"UTF-8\">
+     <meta http-equiv=\"refresh\" content=\"0;url=/static/login.html\">
+   </head>
+   <body>
+     <script>window.location.href = '/static/login.html';</script>
+   </body>
+   </html>
+   EOF"
+   
+   # 重启容器
+   docker restart gosynflood-manager
+   ```
+
+6. **检查浏览器控制台错误**：
+   登录时打开浏览器开发者工具(F12)，查看网络请求和控制台错误：
+   - 如果看到 401 错误，说明令牌不正确
+   - 如果看到 404 错误，说明路径配置有问题
+   - 如果看到网络连接错误，可能是CORS或网络配置问题
+
+7. **检查CORS配置**：
+   如果使用了代理服务器，确保CORS配置正确：
+   ```bash
+   # 查看main.go中的CORS配置
+   cat backend/main.go | grep -A 10 "cors.New"
+   ```
+
+以上步骤应该能解决大多数登录认证相关的问题。如果仍然无法解决，可以提供更详细的错误信息，以便得到更有针对性的解决方案。
+
 ## 常见问题解决
 
 1. **找不到attack-manager镜像错误**:

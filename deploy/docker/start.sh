@@ -38,163 +38,17 @@ log_info "版本: 1.0.0"
 log_info "启动时间: $(date)"
 log_info "服务端口: 31457"
 
-# 检查环境变量和授权令牌
-if [ -n "$ADMIN_TOKEN" ]; then
-    echo -e "${INFO} 检查到ADMIN_TOKEN环境变量，将更新管理员令牌"
-    
-    # 完全重写auth.go文件而不是使用sed，避免语法错误
-    cat > /tmp/auth.go.new << 'EOF'
-package middleware
-
-import (
-	"encoding/json"
-	"io"
-	"net/http"
-	"strings"
-	"time"
-	"path/filepath"
-	"os"
-)
-
-// 配置保存在内存中的安全令牌
-var (
-	AdminToken = "ADMIN_TOKEN_PLACEHOLDER" // 将被替换为真实令牌
-)
-
-// AdminAuthMiddleware 验证需要管理员权限的请求
-func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := ""
-		authHeader := r.Header.Get("X-Admin-Token")
-		if authHeader != "" {
-			token = authHeader
-		}
-		
-		if token == "" && (r.Method == "POST" || r.Method == "PUT") {
-			bodyBytes, err := io.ReadAll(r.Body)
-			if err == nil {
-				r.Body.Close()
-				r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-				var requestData map[string]interface{}
-				if err := json.Unmarshal(bodyBytes, &requestData); err == nil {
-					if adminToken, ok := requestData["adminToken"].(string); ok && adminToken != "" {
-						token = adminToken
-					}
-				}
-			}
-		}
-		
-		if token == "" {
-			if paramToken := r.URL.Query().Get("adminToken"); paramToken != "" {
-				token = paramToken
-			}
-		}
-		
-		if token == "" {
-			if cookie, err := r.Cookie("admin_token"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		}
-		
-		if token == "" || token != AdminToken {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "需要有效的管理员令牌",
-			})
-			return
-		}
-		
-		next(w, r)
-	}
-}
-
-// FrontendAuthMiddleware 保护前端页面
-func FrontendAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 允许静态资源无需认证
-		if strings.HasPrefix(r.URL.Path, "/static/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		
-		// 检查login页面不需要认证
-		if r.URL.Path == "/login" || r.URL.Path == "/login.html" || r.URL.Path == "/login-root.html" {
-			http.ServeFile(w, r, "/app/backend/static/login.html")
-			return
-		}
-		
-		// 验证认证Cookie
-		cookie, err := r.Cookie("admin_token")
-		if err != nil || cookie.Value != AdminToken {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		
-		// 处理根路径和其他前端路由
-		if r.URL.Path == "/" || !strings.Contains(r.URL.Path, ".") {
-			indexPath := "/app/backend/static/index.html"
-			if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-				http.Error(w, "Frontend not found. Please build frontend assets.", http.StatusNotFound)
-				return
-			}
-			http.ServeFile(w, r, indexPath)
-			return
-		}
-		
-		next.ServeHTTP(w, r)
-	}
-)
-
-// SetAuthCookie 设置认证Cookie
-func SetAuthCookie(w http.ResponseWriter, token string) {
-	expires := time.Now().Add(24 * time.Hour)
-	cookie := http.Cookie{
-		Name:     "admin_token",
-		Value:    token,
-		Path:     "/",
-		Expires:  expires,
-		HttpOnly: true,
-	}
-	http.SetCookie(w, &cookie)
-}
-
-// VerifyAdminToken 验证管理员令牌
-func VerifyAdminToken(token string) bool {
-	return token == AdminToken
-}
-
-// ServerState 结构保存全局状态
-type ServerState struct {
-	ApiKeys map[string]string // 键：apiKey，值：用户标识
-}
-
-// NewServerState 创建新的服务器状态
-func NewServerState() *ServerState {
-	return &ServerState{
-		ApiKeys: make(map[string]string),
-	}
-}
-
-// ValidateAPIKey 确保API密钥有效
-func (s *ServerState) ValidateAPIKey(key string) bool {
-	_, exists := s.ApiKeys[key]
-	return exists
-}
-EOF
-
-    # 替换占位符为真实令牌
-    sed -i "s/ADMIN_TOKEN_PLACEHOLDER/$ADMIN_TOKEN/g" /tmp/auth.go.new
-    
-    # 替换现有auth.go文件
-    cp /tmp/auth.go.new /app/backend/middleware/auth.go
-    rm /tmp/auth.go.new
-    
-    # 验证令牌是否已正确设置
-    TOKEN_CHECK=$(grep -o 'AdminToken = "[^"]*"' /app/backend/middleware/auth.go)
-    echo -e "${SUCCESS} 管理员令牌已更新为: $TOKEN_CHECK"
+# 更新管理员令牌
+if [ ! -z "$ADMIN_TOKEN" ]; then
+  # 直接设置环境变量，让程序自动读取，而不是修改代码文件
+  export ADMIN_TOKEN="$ADMIN_TOKEN"
+  log_success "管理员令牌已更新: 长度 ${#ADMIN_TOKEN} 字符"
+  
+  # 仅用于调试，显示令牌前几个字符
+  TOKEN_PREVIEW="${ADMIN_TOKEN:0:3}..."
+  log_info "令牌预览: $TOKEN_PREVIEW"
 else
-    echo -e "${WARNING} 未设置ADMIN_TOKEN环境变量，将使用默认令牌"
+  log_warn "未设置ADMIN_TOKEN环境变量，将使用默认令牌"
 fi
 
 # 系统检查

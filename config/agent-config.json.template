@@ -1,0 +1,9 @@
+{
+    "serverId": 1001,
+    "apiKey": "YOUR_API_KEY_HERE",
+    "masterUrl": "http://master-server:31457",
+    "toolsPath": "/path/to/gosynflood/tools",
+    "interfaces": ["eth0", "wlan0"],
+    "checkInterval": 5,
+    "debug": false
+} 

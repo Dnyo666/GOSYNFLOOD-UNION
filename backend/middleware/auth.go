@@ -3,6 +3,7 @@ package middleware
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -10,10 +11,20 @@ import (
 )
 
 // 配置保存在内存中的安全令牌
-// 注意：在生产环境应使用更安全的存储和哈希方法
 var (
-	AdminToken = "secure-admin-token-change-me" // 生产环境应使用环境变量
+	AdminToken = "secure-admin-token-change-me" // 生产环境会由环境变量覆盖
 )
+
+// 初始化函数，从环境变量加载令牌
+func init() {
+	// 从环境变量获取管理员令牌
+	if envToken := os.Getenv("ADMIN_TOKEN"); envToken != "" {
+		log.Printf("从环境变量加载管理员令牌，长度: %d", len(envToken))
+		AdminToken = envToken
+	} else {
+		log.Printf("警告: 未设置ADMIN_TOKEN环境变量，使用默认令牌")
+	}
+}
 
 // AdminAuthMiddleware 验证需要管理员权限的请求
 func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -21,13 +32,13 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// 提取和验证管理员令牌
 		token := ""
 
-		// 检查请求头
+		// 1. 检查请求头
 		authHeader := r.Header.Get("X-Admin-Token")
 		if authHeader != "" {
 			token = authHeader
 		}
 
-		// 如果请求头中没有令牌，尝试从请求体中获取
+		// 2. 检查请求体 (对于POST/PUT请求)
 		if token == "" && (r.Method == "POST" || r.Method == "PUT") {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err == nil {
@@ -43,21 +54,21 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// 检查URL参数中是否有令牌
+		// 3. 检查URL参数
 		if token == "" {
 			if paramToken := r.URL.Query().Get("adminToken"); paramToken != "" {
 				token = paramToken
 			}
 		}
 
-		// 检查Cookie中是否有令牌
+		// 4. 检查Cookie
 		if token == "" {
 			if cookie, err := r.Cookie("admin_token"); err == nil && cookie.Value != "" {
 				token = cookie.Value
 			}
 		}
 
-		// 如果令牌为空或不匹配，拒绝请求
+		// 验证令牌
 		if token == "" || token != AdminToken {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -72,47 +83,42 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// FrontendAuthMiddleware 用于保护前端页面，确保用户已登录
+// FrontendAuthMiddleware 保护前端页面，确保用户已登录
 func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 允许直接访问登录页面和静态资源
-			if r.URL.Path == loginPath || 
-			   r.URL.Path == "/login-root.html" ||
-			   r.URL.Path == "/login.html" ||
-			   strings.HasPrefix(r.URL.Path, "/api/login") ||
-			   strings.HasPrefix(r.URL.Path, "/assets/") ||
-			   strings.HasPrefix(r.URL.Path, "/favicon.ico") {
-				
-				// 对于/login-root.html，直接提供login.html文件
+			// 允许直接访问静态资源，无需认证
+			if strings.HasPrefix(r.URL.Path, "/static/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			
+			// 登录相关页面无需认证
+			if r.URL.Path == "/login" || r.URL.Path == "/login.html" || r.URL.Path == "/login-root.html" {
+				// 对于login-root.html，直接提供login.html文件
 				if r.URL.Path == "/login-root.html" {
 					http.ServeFile(w, r, "/app/backend/static/login.html")
 					return
 				}
 				
-				// 其他不需要验证的路径直接放行
+				// 其他登录相关页面放行
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// 从Cookie中检查令牌
-			authenticated := false
-			if cookie, err := r.Cookie("admin_token"); err == nil && cookie.Value != "" {
-				// 验证Cookie中的令牌是否有效
-				if cookie.Value == AdminToken {
-					authenticated = true
-				}
-			}
-
-			// 如果未通过认证，重定向到登录页面
-			if !authenticated {
-				http.Redirect(w, r, loginPath, http.StatusSeeOther)
+			// 从Cookie中验证令牌
+			cookie, err := r.Cookie("admin_token")
+			if err != nil || cookie.Value != AdminToken {
+				// 未登录，重定向到登录页面
+				http.Redirect(w, r, "/login-root.html", http.StatusSeeOther)
 				return
 			}
 
-			// 检查是否是前端路由请求
-			if !strings.Contains(r.URL.Path, ".") && r.Method == "GET" {
+			// 处理前端路由 (不包含扩展名的请求视为前端路由)
+			if r.URL.Path == "/" || !strings.Contains(r.URL.Path, ".") {
 				indexPath := "/app/backend/static/index.html"
+				
+				// 检查index.html是否存在
 				if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 					// 尝试查找备用路径
 					alternativePaths := []string{
@@ -126,26 +132,23 @@ func FrontendAuthMiddleware(loginPath string) func(http.Handler) http.Handler {
 							break
 						}
 					}
+					
+					// 如果所有路径都不存在
+					if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+						http.Error(w, "前端文件未找到，请检查构建过程", http.StatusNotFound)
+						return
+					}
 				}
 				
+				// 提供index.html文件
 				http.ServeFile(w, r, indexPath)
 				return
 			}
 			
+			// 已认证的其他请求放行
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// VerifyAdminToken 验证管理员令牌并返回相应的HTTP状态
-func VerifyAdminToken(token string) (bool, int) {
-	if token == "" {
-		return false, http.StatusBadRequest
-	}
-	if token != AdminToken {
-		return false, http.StatusUnauthorized
-	}
-	return true, http.StatusOK
 }
 
 // SetAuthCookie 设置认证Cookie
@@ -160,6 +163,20 @@ func SetAuthCookie(w http.ResponseWriter, token string) {
 		Expires:  time.Now().Add(24 * time.Hour),
 	}
 	http.SetCookie(w, cookie)
+}
+
+// VerifyAdminToken 验证管理员令牌
+func VerifyAdminToken(token string) (bool, int) {
+	if token == "" {
+		log.Printf("验证失败: 令牌为空")
+		return false, http.StatusBadRequest // 400 错误
+	}
+	if token != AdminToken {
+		log.Printf("验证失败: 令牌不匹配 (输入长度: %d, 有效长度: %d)", len(token), len(AdminToken))
+		return false, http.StatusUnauthorized // 401 错误
+	}
+	log.Printf("令牌验证成功")
+	return true, http.StatusOK // 200 成功
 }
 
 // ServerState 定义服务器状态结构
