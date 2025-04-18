@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -55,9 +56,8 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		data := map[string]interface{}{
-			"serverId":    config.ServerID,
-			"apiKey":      config.APIKey,
+		// 准备心跳数据
+		heartbeatData := map[string]interface{}{
 			"packetsSent": atomic.LoadUint64(&packetsSent),
 			"packetsRate": atomic.LoadUint64(&packetsRate),
 		}
@@ -65,19 +65,28 @@ func sendHeartbeat() {
 		// 添加当前任务信息（如果有）
 		taskMutex.RLock()
 		if activeTask != nil {
-			data["activeTaskId"] = activeTask.ID
+			heartbeatData["activeTaskId"] = activeTask.ID
 		}
 		taskMutex.RUnlock()
 
-		// 发送心跳
-		jsonData, err := json.Marshal(data)
+		// 将serverId和apiKey从JSON体移到URL参数中
+		// 使用url.QueryEscape处理特殊字符
+		heartbeatURL := fmt.Sprintf("%s/api/heartbeat?serverId=%d&apiKey=%s", 
+			config.MasterURL, 
+			config.ServerID, 
+			url.QueryEscape(config.APIKey))
+
+		// 编码剩余数据
+		jsonData, err := json.Marshal(heartbeatData)
 		if err != nil {
 			log.Printf("编码心跳数据失败: %v", err)
 			continue
 		}
 
+		// 发送心跳请求
+		log.Printf("发送心跳: %s", heartbeatURL)
 		resp, err := http.Post(
-			fmt.Sprintf("%s/api/heartbeat", config.MasterURL),
+			heartbeatURL,
 			"application/json",
 			bytes.NewBuffer(jsonData),
 		)
@@ -99,8 +108,9 @@ func sendHeartbeat() {
 func listenForCommands() {
 	for {
 		// 构建完整的API URL
+		// 对API密钥进行URL编码，确保特殊字符正确处理
 		commandURL := fmt.Sprintf("%s/api/commands?serverId=%d&apiKey=%s", 
-			config.MasterURL, config.ServerID, config.APIKey)
+			config.MasterURL, config.ServerID, url.QueryEscape(config.APIKey))
 		
 		// 在实际环境中，这里应该使用 WebSocket 长连接或长轮询
 		// 为了简单起见，我们使用短轮询
