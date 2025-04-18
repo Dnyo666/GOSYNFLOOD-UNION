@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -59,7 +60,7 @@ func sendHeartbeat() {
 		// 直接构建JSON字符串，避免任何形式的自动转义
 		jsonStr := fmt.Sprintf(`{"serverId":%d,"apiKey":"%s","packetsSent":%d,"packetsRate":%d}`, 
 			config.ServerID, 
-			config.APIKey,  // 直接使用原始API密钥
+			config.APIKey,
 			atomic.LoadUint64(&packetsSent),
 			atomic.LoadUint64(&packetsRate))
 
@@ -81,9 +82,15 @@ func sendHeartbeat() {
 		heartbeatURL := fmt.Sprintf("%s/api/heartbeat", config.MasterURL)
 
 		// 发送心跳请求
-		log.Printf("发送心跳: %s", heartbeatURL)
+		log.Printf("发送心跳: %s (数据: %s)", heartbeatURL, jsonStr)
 		
-		req, err := http.NewRequest("POST", heartbeatURL, strings.NewReader(jsonStr))
+		// 同时使用URL参数和JSON体发送参数，确保至少一种方式能工作
+		targetURL := fmt.Sprintf("%s?serverId=%d&apiKey=%s", 
+			heartbeatURL, 
+			config.ServerID, 
+			url.QueryEscape(config.APIKey))
+
+		req, err := http.NewRequest("POST", targetURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建心跳请求失败: %v", err)
 			continue
@@ -120,11 +127,17 @@ func listenForCommands() {
 		// 直接构建JSON字符串，避免任何形式的自动转义
 		jsonStr := fmt.Sprintf(`{"serverId":%d,"apiKey":"%s"}`,
 			config.ServerID,
-			config.APIKey)  // 直接使用原始API密钥
+			config.APIKey)
+		
+		// 同时使用URL参数和JSON体发送参数，确保至少一种方式能工作
+		targetURL := fmt.Sprintf("%s?serverId=%d&apiKey=%s", 
+			commandURL, 
+			config.ServerID, 
+			url.QueryEscape(config.APIKey))
 		
 		// 发送命令请求
-		log.Printf("获取命令: %s", commandURL)
-		req, err := http.NewRequest("POST", commandURL, strings.NewReader(jsonStr))
+		log.Printf("获取命令: %s (数据: %s)", targetURL, jsonStr)
+		req, err := http.NewRequest("POST", targetURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建请求失败: %v", err)
 			time.Sleep(5 * time.Second)
