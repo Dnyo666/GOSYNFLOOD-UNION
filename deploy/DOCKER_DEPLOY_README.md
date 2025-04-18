@@ -147,14 +147,18 @@ ADMIN_TOKEN=$(openssl rand -hex 16) docker-compose up -d
    docker-compose up -d
    ```
 
-2. **Go依赖问题(missing go.sum entry或not a known dependency)**:
+2. **Go依赖问题(missing go.sum entry或not a known dependency或imported and not used)**:
    ```
    go: github.com/gorilla/mux@v1.8.0: missing go.sum entry
    go: module github.com/gorilla/mux: not a known dependency
+   middleware/auth.go:9:2: imported and not used: "path/filepath"
    ```
    
    解决方案: 
    ```bash
+   # 修复未使用的导入
+   sed -i '/path\/filepath/d' backend/middleware/auth.go
+   
    # 添加缺失的gorilla/mux依赖
    echo "require github.com/gorilla/mux v1.8.0" >> backend/go.mod
    

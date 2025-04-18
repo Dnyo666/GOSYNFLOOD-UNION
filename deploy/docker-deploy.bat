@@ -93,36 +93,37 @@ if not exist "frontend" (
 )
 
 REM 预处理Go依赖
-if exist "backend\go.mod" (
-    call :info "预处理Go模块依赖..."
+IF EXIST "backend\go.mod" (
+    ECHO [INFO] 预处理Go模块依赖...
     
     REM 确保go.sum文件存在
-    if not exist "backend\go.sum" (
-        echo. > backend\go.sum
-    )
-    if not exist "go.sum" (
-        echo. > go.sum
+    COPY NUL backend\go.sum >NUL 2>&1
+    COPY NUL go.sum >NUL 2>&1
+    
+    REM 检查是否有gorilla/mux依赖
+    FINDSTR /C:"github.com/gorilla/mux" backend\go.mod >NUL
+    IF ERRORLEVEL 1 (
+        ECHO [INFO] 添加缺失的gorilla/mux依赖到go.mod...
+        ECHO require github.com/gorilla/mux v1.8.0 >> backend\go.mod
     )
     
-    REM 检查是否已有gorilla/mux依赖
-    findstr /C:"github.com/gorilla/mux" backend\go.mod >nul
-    if %ERRORLEVEL% neq 0 (
-        call :info "添加缺失的gorilla/mux依赖到go.mod..."
-        echo require github.com/gorilla/mux v1.8.0 >> backend\go.mod
-    )
-    
-    where go >nul 2>nul
-    if %ERRORLEVEL% equ 0 (
-        REM 使用本地Go预处理依赖
-        pushd backend
-        go mod tidy 
-        go mod download
-        popd
-        if %ERRORLEVEL% neq 0 (
-            call :warn "本地预处理Go依赖失败，将在Docker中尝试"
+    REM 修复未使用的导入
+    FINDSTR /C:"path/filepath" backend\middleware\auth.go >NUL
+    IF NOT ERRORLEVEL 1 (
+        FINDSTR /C:"filepath." backend\middleware\auth.go >NUL
+        IF ERRORLEVEL 1 (
+            ECHO [INFO] 修复auth.go中未使用的filepath导入...
+            powershell -Command "(Get-Content backend\middleware\auth.go) | Where-Object {$_ -notmatch 'path/filepath'} | Set-Content backend\middleware\auth.go"
         )
-    ) else (
-        call :warn "未检测到本地Go安装，将在Docker中处理依赖"
+    )
+    
+    REM 尝试在本地预处理依赖
+    go version >NUL 2>&1
+    IF NOT ERRORLEVEL 1 (
+        ECHO [INFO] 使用本地Go预处理依赖...
+        CD backend && go mod tidy && go mod download && CD ..
+    ) ELSE (
+        ECHO [WARN] 未检测到本地Go安装，将在Docker中处理依赖
     )
 )
 

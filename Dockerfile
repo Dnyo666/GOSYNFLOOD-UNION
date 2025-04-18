@@ -25,6 +25,9 @@ RUN cd backend && \
 COPY backend/ ./backend/
 COPY *.go ./
 
+# 修复middleware/auth.go中未使用的导入
+RUN sed -i '/path\/filepath/d' ./backend/middleware/auth.go
+
 # 构建后端
 RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/attack-server main.go
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"path/filepath"
 	"os"
 )
 

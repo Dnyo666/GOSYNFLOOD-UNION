@@ -96,6 +96,12 @@ if [ -f "backend/go.mod" ]; then
         echo "require github.com/gorilla/mux v1.8.0" >> backend/go.mod
     fi
     
+    # 修复未使用的导入
+    if grep -q "path/filepath" backend/middleware/auth.go && ! grep -q "filepath\." backend/middleware/auth.go; then
+        info "修复auth.go中未使用的filepath导入..."
+        sed -i '/path\/filepath/d' backend/middleware/auth.go
+    fi
+    
     if command -v go &> /dev/null; then
         # 使用本地Go安装预处理依赖
         (cd backend && go mod tidy && go mod download) || warn "本地预处理Go依赖失败，将在Docker中尝试"
