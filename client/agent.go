@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -55,9 +56,9 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 准备心跳数据，将serverId和apiKey移到请求体中
+		// 准备心跳数据，将serverId和apiKey移到请求体中，确保ID作为字符串
 		heartbeatData := map[string]interface{}{
-			"serverId":    config.ServerID,
+			"serverId":    fmt.Sprintf("%d", config.ServerID), // 转换为字符串
 			"apiKey":      config.APIKey,
 			"packetsSent": atomic.LoadUint64(&packetsSent),
 			"packetsRate": atomic.LoadUint64(&packetsRate),
@@ -81,23 +82,39 @@ func sendHeartbeat() {
 		}
 
 		// 发送心跳请求
-		log.Printf("发送心跳: %s", heartbeatURL)
-		resp, err := http.Post(
-			heartbeatURL,
-			"application/json",
-			bytes.NewBuffer(jsonData),
-		)
+		log.Printf("发送心跳: %s (发送数据: %s)", heartbeatURL, string(jsonData))
+		
+		req, err := http.NewRequest("POST", heartbeatURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			log.Printf("创建心跳请求失败: %v", err)
+			continue
+		}
+		
+		// 设置请求头
+		req.Header.Set("Content-Type", "application/json")
+		
+		// 同时在URL参数中添加认证信息作为备用
+		q := req.URL.Query()
+		q.Add("serverId", fmt.Sprintf("%d", config.ServerID))
+		q.Add("apiKey", config.APIKey)
+		req.URL.RawQuery = q.Encode()
+		
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("发送心跳失败: %v", err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("心跳响应错误: %s", resp.Status)
+			// 读取错误响应内容
+			respBody, _ := io.ReadAll(resp.Body)
+			log.Printf("心跳响应错误: %s (%s)", resp.Status, string(respBody))
 		} else {
 			log.Printf("心跳发送成功")
 		}
+		
+		resp.Body.Close()
 	}
 }
 
@@ -106,8 +123,10 @@ func listenForCommands() {
 	for {
 		// 构建命令URL和请求体 - 将serverId和apiKey作为JSON请求体
 		commandURL := fmt.Sprintf("%s/api/commands", config.MasterURL)
+		
+		// 确保serverId作为字符串发送
 		requestData := map[string]interface{}{
-			"serverId": config.ServerID,
+			"serverId": fmt.Sprintf("%d", config.ServerID), // 转换为字符串
 			"apiKey":   config.APIKey,
 		}
 		
@@ -120,12 +139,25 @@ func listenForCommands() {
 		}
 		
 		// 发送命令请求
-		log.Printf("获取命令: %s", commandURL)
-		resp, err := http.Post(
-			commandURL,
-			"application/json",
-			bytes.NewBuffer(jsonData),
-		)
+		log.Printf("获取命令: %s (发送数据: %s)", commandURL, string(jsonData))
+		req, err := http.NewRequest("POST", commandURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			log.Printf("创建请求失败: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		
+		// 设置请求头
+		req.Header.Set("Content-Type", "application/json")
+		
+		// 同时在URL参数中添加认证信息作为备用
+		q := req.URL.Query()
+		q.Add("serverId", fmt.Sprintf("%d", config.ServerID))
+		q.Add("apiKey", config.APIKey)
+		req.URL.RawQuery = q.Encode()
+		
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("获取命令失败: %v", err)
 			time.Sleep(5 * time.Second)
@@ -164,7 +196,9 @@ func listenForCommands() {
 				log.Printf("未知命令类型: %s", command.Type)
 			}
 		} else {
-			log.Printf("获取命令响应错误: %s", resp.Status)
+			// 读取错误响应内容
+			respBody, _ := io.ReadAll(resp.Body)
+			log.Printf("获取命令响应错误: %s (%s)", resp.Status, string(respBody))
 			resp.Body.Close()
 		}
 
