@@ -776,16 +776,29 @@ get_source_code() {
     if [ "$INSTALL_MODE" = "manager" ]; then
         mkdir -p bin data backend/static
     else
-        mkdir -p bin
+        mkdir -p bin config
     fi
     
-    # 获取项目代码（如果不在项目目录内）
-    if [ ! -d "backend" ] || [ ! -d "frontend" ] || [ ! -d "client" ]; then
-        echo "正在克隆项目代码..."
-        git clone https://github.com/Dnyo666/gosynflood-union.git .
+    # 使用当前目录的代码
+    echo "正在检查项目结构..."
+    
+    # 验证是否在gosynflood项目目录中
+    if [ ! -d "backend" ] || [ ! -d "client" ]; then
+        print_yellow "警告: 未检测到完整的项目结构，这可能不是gosynflood项目目录"
+        print_yellow "当前目录: $(pwd)"
+        
+        # 输出当前目录的文件列表
+        echo "目录内容:"
+        ls -la
+        
+        # 询问用户是否继续
+        read -p "是否继续安装? (y/n): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            print_red "安装已取消"
+            exit 1
+        fi
     else
-        echo "正在更新项目代码..."
-        git pull
+        print_green "检测到gosynflood项目结构，继续安装"
     fi
     
     print_green "源代码准备完成。"
@@ -987,34 +1000,37 @@ EOF
         # 创建代理启动脚本
         START_SCRIPT="$INSTALL_DIR/bin/start-agent.sh"
         echo "创建代理启动脚本..."
+        
+        # 转义API密钥中的特殊字符，避免URL编码问题
+        AGENT_KEY_ESCAPED=$(echo "$AGENT_KEY" | sed 's/&/\\&/g')
+        
         cat > "$START_SCRIPT" << EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
 # 使用配置文件启动，也支持命令行参数覆盖
-./attack-agent -id $AGENT_ID -key "$AGENT_KEY" -master "$MANAGER_URL" -tools "/usr/local/bin" "\$@"
+./attack-agent -id $AGENT_ID -key "$AGENT_KEY_ESCAPED" -master "$MANAGER_URL" -tools "/usr/local/bin" "\$@"
 # 注意：配置文件位于 $INSTALL_DIR/config/agent-config.json
 # 如果您需要修改配置，可以编辑该文件
 EOF
         chmod +x "$START_SCRIPT"
         echo "启动脚本已创建: $START_SCRIPT"
         
-        # 创建标准的代理配置文件
-        CONFIG_DIR="$INSTALL_DIR/config"
-        mkdir -p "$CONFIG_DIR"
-        AGENT_CONFIG_FILE="$CONFIG_DIR/agent-config.json"
-        echo "创建代理配置文件..."
-        cat > "$AGENT_CONFIG_FILE" << EOF
+        # 创建代理配置文件
+        CONFIG_FILE="$INSTALL_DIR/config/agent-config.json"
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        
+        # 转义JSON特殊字符
+        AGENT_KEY_JSON=$(echo "$AGENT_KEY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+        
+        cat > "$CONFIG_FILE" << EOF
 {
-    "serverId": $AGENT_ID,
-    "apiKey": "$AGENT_KEY",
-    "masterUrl": "$MANAGER_URL",
-    "toolsPath": "/usr/local/bin",
-    "toolName": "gosynflood",
-    "checkInterval": 5,
-    "debug": false
+    "ServerID": "$AGENT_ID",
+    "APIKey": "$AGENT_KEY_JSON",
+    "MasterURL": "$MANAGER_URL",
+    "ToolsPath": "/usr/local/bin"
 }
 EOF
-        echo "配置文件已创建: $AGENT_CONFIG_FILE"
+        echo "配置文件已创建: $CONFIG_FILE"
     fi
 }
 
@@ -1384,6 +1400,103 @@ EOF
     fi
 }
 
+# 函数：安装gosynflood工具
+install_gosynflood_tool() {
+    if [ "$INSTALL_MODE" = "agent" ]; then
+        echo "开始安装gosynflood攻击工具..."
+        
+        # 检查gosynflood是否已安装
+        if command -v gosynflood &> /dev/null; then
+            print_green "gosynflood工具已安装: $(which gosynflood)"
+            return 0
+        fi
+        
+        # 安装目标目录
+        TOOL_INSTALL_DIR="/usr/local/bin"
+        if [ ! -d "$TOOL_INSTALL_DIR" ]; then
+            print_yellow "创建工具安装目录: $TOOL_INSTALL_DIR"
+            if [ "$EUID" -ne 0 ]; then
+                print_yellow "需要root权限，尝试使用sudo..."
+                sudo mkdir -p "$TOOL_INSTALL_DIR" || {
+                    print_red "无法创建目录，请使用sudo运行安装脚本"
+                    return 1
+                }
+            else
+                mkdir -p "$TOOL_INSTALL_DIR"
+            fi
+        fi
+        
+        # 直接从本地源码构建gosynflood工具
+        print_yellow "从本地源码构建gosynflood工具..."
+        
+        # 检查源文件是否存在
+        if [ ! -f "$INSTALL_DIR/gosynflood.go" ]; then
+            print_red "找不到gosynflood源码文件: $INSTALL_DIR/gosynflood.go"
+            print_yellow "请确保您在gosynflood项目根目录中运行此脚本"
+            return 1
+        fi
+        
+        # 创建临时构建目录
+        BUILD_DIR=$(mktemp -d)
+        print_yellow "创建临时构建目录: $BUILD_DIR"
+        
+        # 复制所有必要的源文件到构建目录
+        cp "$INSTALL_DIR/gosynflood.go" "$BUILD_DIR/"
+        cp "$INSTALL_DIR/sendpayloads.go" "$BUILD_DIR/" 2>/dev/null
+        cp "$INSTALL_DIR/cbind.go" "$BUILD_DIR/" 2>/dev/null
+        
+        # 如果存在go.mod，也复制它
+        if [ -f "$INSTALL_DIR/go.mod" ]; then
+            cp "$INSTALL_DIR/go.mod" "$BUILD_DIR/"
+        else
+            # 创建一个简单的go.mod文件
+            cd "$BUILD_DIR"
+            go mod init gosynflood
+        fi
+        
+        # 构建工具
+        cd "$BUILD_DIR"
+        print_yellow "开始构建gosynflood工具..."
+        go mod tidy
+        go build -o gosynflood gosynflood.go || {
+            print_red "构建失败，尝试包含其他依赖文件..."
+            
+            # 尝试使用所有.go文件进行构建
+            GO_FILES=$(ls *.go 2>/dev/null)
+            go build -o gosynflood $GO_FILES || {
+                print_red "gosynflood构建失败"
+                rm -rf "$BUILD_DIR"
+                return 1
+            }
+        }
+        
+        print_green "构建成功"
+        
+        # 安装工具
+        print_yellow "安装gosynflood到 $TOOL_INSTALL_DIR/gosynflood"
+        if [ "$EUID" -ne 0 ]; then
+            print_yellow "需要root权限，尝试使用sudo..."
+            sudo cp "$BUILD_DIR/gosynflood" "$TOOL_INSTALL_DIR/gosynflood"
+            sudo chmod +x "$TOOL_INSTALL_DIR/gosynflood"
+        else
+            cp "$BUILD_DIR/gosynflood" "$TOOL_INSTALL_DIR/gosynflood"
+            chmod +x "$TOOL_INSTALL_DIR/gosynflood"
+        fi
+        
+        # 清理临时目录
+        rm -rf "$BUILD_DIR"
+        
+        # 验证安装
+        if command -v gosynflood &> /dev/null; then
+            print_green "gosynflood工具安装成功: $(which gosynflood)"
+            return 0
+        else
+            print_red "gosynflood安装失败，请手动安装"
+            return 1
+        fi
+    fi
+}
+
 # 主流程
 # 解析命令行参数
 parse_args "$@"
@@ -1453,4 +1566,5 @@ fi
 
 create_config
 create_launcher_scripts
+install_gosynflood_tool
 show_usage 
