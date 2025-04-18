@@ -6,4 +6,10 @@
     "interfaces": ["eth0", "wlan0"],
     "checkInterval": 5,
     "debug": false
-} 
+}
+/* 
+   配置说明：
+   - masterUrl: 管理服务器URL，必须包含完整的协议前缀(http://或https://)和端口
+   - 格式示例: "http://example.com:31457" 或 "https://10.0.0.1:31457"
+   - 注意: 确保URL格式正确，避免使用 "http:/example.com" 这样的格式
+*/ 

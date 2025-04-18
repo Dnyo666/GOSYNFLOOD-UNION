@@ -84,13 +84,8 @@ func sendHeartbeat() {
 		// 发送心跳请求
 		log.Printf("发送心跳: %s (数据: %s)", heartbeatURL, jsonStr)
 		
-		// 同时使用URL参数和JSON体发送参数，确保至少一种方式能工作
-		targetURL := fmt.Sprintf("%s?serverId=%d&apiKey=%s", 
-			heartbeatURL, 
-			config.ServerID, 
-			url.QueryEscape(config.APIKey))
-
-		req, err := http.NewRequest("POST", targetURL, strings.NewReader(jsonStr))
+		// 创建请求，将参数放在请求体中
+		req, err := http.NewRequest("POST", heartbeatURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建心跳请求失败: %v", err)
 			continue
@@ -129,15 +124,9 @@ func listenForCommands() {
 			config.ServerID,
 			config.APIKey)
 		
-		// 同时使用URL参数和JSON体发送参数，确保至少一种方式能工作
-		targetURL := fmt.Sprintf("%s?serverId=%d&apiKey=%s", 
-			commandURL, 
-			config.ServerID, 
-			url.QueryEscape(config.APIKey))
-		
 		// 发送命令请求
-		log.Printf("获取命令: %s (数据: %s)", targetURL, jsonStr)
-		req, err := http.NewRequest("POST", targetURL, strings.NewReader(jsonStr))
+		log.Printf("获取命令: %s (数据: %s)", commandURL, jsonStr)
+		req, err := http.NewRequest("POST", commandURL, strings.NewReader(jsonStr))
 		if err != nil {
 			log.Printf("创建请求失败: %v", err)
 			time.Sleep(5 * time.Second)
@@ -463,6 +452,38 @@ func loadConfigFromFile(path string) (AgentConfig, error) {
 	return cfg, nil
 }
 
+// 辅助函数：验证和修复URL格式
+func validateAndFixURL(urlStr string) (string, error) {
+	// 确保URL包含协议前缀
+	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
+		urlStr = "http://" + urlStr
+		log.Printf("URL没有协议前缀，已添加http://: %s", urlStr)
+	}
+	
+	// 修复常见的协议格式错误
+	if strings.HasPrefix(urlStr, "http:/") && !strings.HasPrefix(urlStr, "http://") {
+		urlStr = strings.Replace(urlStr, "http:/", "http://", 1)
+		log.Printf("修复HTTP协议格式: %s", urlStr)
+	} else if strings.HasPrefix(urlStr, "https:/") && !strings.HasPrefix(urlStr, "https://") {
+		urlStr = strings.Replace(urlStr, "https:/", "https://", 1)
+		log.Printf("修复HTTPS协议格式: %s", urlStr)
+	}
+	
+	// 使用net/url包验证URL格式
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return urlStr, fmt.Errorf("URL格式错误: %v", err)
+	}
+	
+	// 确保URL有主机部分
+	if parsedURL.Host == "" {
+		return urlStr, fmt.Errorf("URL缺少有效的主机名")
+	}
+	
+	// 确保URL不以/结尾
+	return strings.TrimSuffix(urlStr, "/"), nil
+}
+
 func main() {
 	// 解析命令行参数
 	serverID := flag.Int("id", 0, "服务器ID")
@@ -530,36 +551,25 @@ func main() {
 			log.Fatalf("必须提供服务器ID和API密钥")
 		}
 
-		// 处理URL格式，确保包含协议前缀
-		formattedURL := *masterURL
-		if !strings.HasPrefix(formattedURL, "http://") && !strings.HasPrefix(formattedURL, "https://") {
-			// 如果URL不包含协议，默认添加http://
-			formattedURL = "http://" + formattedURL
-			log.Printf("未指定协议，使用HTTP: %s", formattedURL)
-		}
-
-		// 确保URL不以/结尾
-		formattedURL = strings.TrimSuffix(formattedURL, "/")
-
 		// 初始化配置
 		config = AgentConfig{
 			ServerID:  *serverID,
 			APIKey:    *apiKey,
-			MasterURL: formattedURL,
+			MasterURL: *masterURL,
 			ToolsPath: *toolsPath,
 			ToolName:  *toolName,
 		}
 	}
 
-	// 处理URL格式，确保包含协议前缀
-	if !strings.HasPrefix(config.MasterURL, "http://") && !strings.HasPrefix(config.MasterURL, "https://") {
-		// 如果URL不包含协议，默认添加http://
-		config.MasterURL = "http://" + config.MasterURL
-		log.Printf("未指定协议，使用HTTP: %s", config.MasterURL)
+	// 验证并修复URL格式
+	fixedURL, err := validateAndFixURL(config.MasterURL)
+	if err != nil {
+		log.Printf("警告: 管理服务器URL格式有问题: %v", err)
+		log.Printf("原始URL: %s, 尝试使用修复后的URL", config.MasterURL)
+	} else if fixedURL != config.MasterURL {
+		log.Printf("已修复管理服务器URL格式: %s -> %s", config.MasterURL, fixedURL)
 	}
-
-	// 确保URL不以/结尾
-	config.MasterURL = strings.TrimSuffix(config.MasterURL, "/")
+	config.MasterURL = fixedURL
 
 	// 检查工具是否存在
 	toolPath := filepath.Join(config.ToolsPath, config.ToolName)
@@ -585,28 +595,31 @@ func main() {
 		}
 		
 		if !found {
-			log.Printf("警告: 未找到gosynflood工具，将尝试从预定义位置使用")
-			log.Printf("如果攻击命令失败，请安装工具或提供正确的路径")
+			log.Printf("警告: 未找到gosynflood工具，请确保工具已安装并在路径中或使用--tools指定路径")
 		}
 	}
 
-	// 显示启动信息
-	log.Printf("启动GOSYNFLOOD攻击代理")
+	// 输出最终配置
 	log.Printf("服务器ID: %d", config.ServerID)
-	log.Printf("管理服务器: %s", config.MasterURL)
-	log.Printf("工具路径: %s", filepath.Join(config.ToolsPath, config.ToolName))
+	log.Printf("管理服务器URL: %s", config.MasterURL)
+	log.Printf("工具路径: %s/%s", config.ToolsPath, config.ToolName)
 
-	// 设置信号处理以优雅退出
+	// 设置信号处理，用于优雅退出
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Println("接收到退出信号，正在清理...")
+		log.Println("接收到终止信号，正在停止攻击...")
 		stopAttack()
+		log.Println("正在退出...")
 		os.Exit(0)
 	}()
 
 	// 启动心跳和命令监听
 	go sendHeartbeat()
+	go monitorAttackStats()
+	
+	// 主线程监听命令
+	log.Printf("开始监听来自%s的命令...", config.MasterURL)
 	listenForCommands()
 } 
